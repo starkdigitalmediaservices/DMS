@@ -274,11 +274,20 @@ async def get_adjudication_queue(
     built against is invented, not modeled on a real scanned spread.
     """
     valid_categories = {"low_confidence", "handwritten", "marginalia", "join_mismatch", "stitch_ambiguous"}
+    SENTINEL_FIELD_NAMES = ("_marginalia", "_join_mismatch", "_stitch_ambiguous")
     if category not in valid_categories:
         raise HTTPException(status_code=400, detail=f"Unknown category '{category}'. Valid: {sorted(valid_categories)}")
 
     conditions = [Fact.tenant_id == tenant_id, Fact.status == "in_review"]
-    if category == "handwritten":
+    if category == "low_confidence":
+        # Every sentinel below already has its own dedicated tab, and all of
+        # them carry a NULL confidence — so under the worst-confidence-first
+        # sort they landed above every real field and buried the queue (230
+        # marginalia rows from one document ahead of 109 genuinely scored
+        # fields). 'handwritten' already excluded _marginalia for the same
+        # reason; this extends that to the generic queue.
+        conditions.append(Fact.field_name.notin_(SENTINEL_FIELD_NAMES))
+    elif category == "handwritten":
         conditions.append(Fact.is_handwritten == True)  # noqa: E712
         conditions.append(Fact.field_name != "_marginalia")
     elif category == "marginalia":

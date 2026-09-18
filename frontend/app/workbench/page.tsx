@@ -104,7 +104,7 @@ export default function WorkbenchPage() {
     {
       key: "low_confidence",
       label: t("workbench.tab.needs_review", "Needs Review"),
-      description: t("workbench.tab.needs_review_desc", "Every field waiting on a human decision, sorted worst-confidence first — not only low-scoring ones."),
+      description: t("workbench.tab.needs_review_desc", "Extracted fields waiting on a human decision, worst-confidence first. Margin notes, join mismatches and continuation questions each have their own tab."),
       available: true,
     },
     {
@@ -869,7 +869,7 @@ export default function WorkbenchPage() {
                 </div>
                 {editPreview.rows.filter((r: any) => r.changed).map((r: any) => (
                   <div key={r.fact_id} className="text-[#1f1f1f]">
-                    {r.field_name}: {formatValue(r.previous_value)} &rarr; {formatValue(r.new_value)}
+                    {fieldLabel(r.field_name)}: {formatValue(r.previous_value)} &rarr; {formatValue(r.new_value)}
                   </div>
                 ))}
               </div>

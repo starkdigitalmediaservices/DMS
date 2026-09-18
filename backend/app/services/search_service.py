@@ -298,72 +298,150 @@ async def _generate_grounded_answer(query: str, response_lang: str, excerpts: li
     return "\n".join(summary_lines), citations, True
 
 
-async def _expand_trilingual_query(query: str) -> dict:
-    """Expand user query into normalized English, Hindi, and Marathi search variants."""
-    try:
-        llm = get_llm_provider()
-        sys_msg = (
-            "You are a multilingual AI query normalization assistant for enterprise document search in India.\n"
-            "Analyze the user query (which could be in English, Hindi, Marathi, or Hinglish) and output a JSON object with 5 keys:\n"
-            '- "detected_lang": the language the QUERY TEXT ITSELF is written in (e.g. "English", "Hindi", "Marathi", "Hinglish")\n'
-            '- "response_lang": the language the user wants the ANSWER written in. Almost always the same as '
-            'detected_lang -- EXCEPT when the query explicitly asks for a different output language regardless of '
-            'what language the query itself is written in (e.g. the English sentence "Explain this document in '
-            'Marathi" has detected_lang "English" but response_lang "Marathi"; "मराठीत सांग" has detected_lang '
-            '"Marathi" and response_lang "Marathi" too, since there is no separate request there). Never invent a '
-            "requested language that isn't actually named in the query -- only differs from detected_lang when the "
-            "query explicitly names a target language.\n"
-            '- "english": concise normalized search query in English stripping away conversational filler words (e.g. "kunal deshmukh che aadhar card ahe ka aaplya files madhe?" -> "Kunal Deshmukh Aadhar Card")\n'
-            '- "hindi": concise search keywords in Hindi (Devanagari script)\n'
-            '- "marathi": concise search keywords in Marathi (Devanagari script)\n'
-            "Output ONLY valid JSON. No markdown formatting."
-        )
-        resp = await llm.complete([
-            Message(role="system", content=sys_msg),
-            Message(role="user", content=f"Query: {query};")
-        ])
-        clean_json = resp.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        data = json.loads(clean_json)
-        logger.info("Tri-lingual query expansion for '%s': %s", query, data)
-        detected_lang = data.get("detected_lang", "English")
-        return {
-            "detected_lang": detected_lang,
-            "response_lang": data.get("response_lang") or detected_lang,
-            "english": data.get("english", query),
-            "hindi": data.get("hindi", query),
-            "marathi": data.get("marathi", query),
-        }
-    except Exception as e:
-        logger.warning("Tri-lingual query expansion failed: %s", e)
-        return {"detected_lang": "English", "response_lang": "English", "english": query, "hindi": query, "marathi": query}
+async def _expand_trilingual_query(query: str, _attempts: int = 2) -> dict:
+    """Expand user query into normalized English, Hindi, and Marathi search variants.
+
+    Retries the LLM call/parse a couple of times before giving up: the
+    provider already rotates across API keys for network/rate-limit
+    failures (see GroqLLMProvider), but a malformed-JSON response or a
+    borderline detected_lang/response_lang call isn't a network error, so
+    it was hitting the static English/English fallback on the very first
+    bad draw -- silently downgrading multilingual query understanding for
+    the whole request on a single flaky sample. One retry gets a second,
+    independent sample from the model before giving up."""
+    llm = get_llm_provider()
+    sys_msg = (
+        "You are a multilingual AI query normalization assistant for enterprise document search in India.\n"
+        "Analyze the user query (which could be in English, Hindi, Marathi, or Hinglish) and output a JSON object with 5 keys:\n"
+        '- "detected_lang": the language the QUERY TEXT ITSELF is written in (e.g. "English", "Hindi", "Marathi", "Hinglish")\n'
+        '- "response_lang": the language the user wants the ANSWER written in. Almost always the same as '
+        'detected_lang -- EXCEPT when the query explicitly asks for a different output language regardless of '
+        'what language the query itself is written in (e.g. the English sentence "Explain this document in '
+        'Marathi" has detected_lang "English" but response_lang "Marathi"; "मराठीत सांग" has detected_lang '
+        '"Marathi" and response_lang "Marathi" too, since there is no separate request there). Never invent a '
+        "requested language that isn't actually named in the query -- only differs from detected_lang when the "
+        "query explicitly names a target language.\n"
+        '- "english": concise normalized search query in English stripping away conversational filler words (e.g. "kunal deshmukh che aadhar card ahe ka aaplya files madhe?" -> "Kunal Deshmukh Aadhar Card")\n'
+        '- "hindi": concise search keywords in Hindi (Devanagari script)\n'
+        '- "marathi": concise search keywords in Marathi (Devanagari script)\n'
+        "Output ONLY valid JSON. No markdown formatting."
+    )
+
+    last_error: Exception | None = None
+    for attempt in range(_attempts):
+        try:
+            resp = await llm.complete([
+                Message(role="system", content=sys_msg),
+                Message(role="user", content=f"Query: {query};")
+            ])
+            clean_json = resp.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            data = json.loads(clean_json)
+            logger.info("Tri-lingual query expansion for '%s': %s", query, data)
+            detected_lang = data.get("detected_lang", "English")
+            return {
+                "detected_lang": detected_lang,
+                "response_lang": data.get("response_lang") or detected_lang,
+                "english": data.get("english", query),
+                "hindi": data.get("hindi", query),
+                "marathi": data.get("marathi", query),
+            }
+        except Exception as e:
+            last_error = e
+            logger.warning("Tri-lingual query expansion attempt %d/%d failed: %s", attempt + 1, _attempts, e)
+            if attempt + 1 < _attempts:
+                # A back-to-back retry with no delay lands in the same
+                # exhausted-quota window as the first call under sustained
+                # load (confirmed live, 2026-09-15: Groq returned an empty
+                # body across all rotated keys for several seconds straight
+                # during the backend test suite's own real-API traffic) --
+                # a short backoff gives a brief provider-side blip a chance
+                # to actually clear before the next attempt.
+                await asyncio.sleep(1.5)
+
+    logger.warning("Tri-lingual query expansion failed after %d attempt(s): %s", _attempts, last_error)
+    return {"detected_lang": "English", "response_lang": "English", "english": query, "hindi": query, "marathi": query}
 
 
-async def _generate_trilingual_hyde(query: str, expanded: dict) -> list[str]:
-    """Generate realistic hypothetical document excerpts (HyDE) in English, Hindi, and Marathi."""
-    try:
-        llm = get_llm_provider()
-        sys_msg = (
-            "You are an AI document intelligence system. Generate realistic, formal 1-sentence hypothetical document excerpts "
-            "or record lines that directly answer the query in 3 languages:\n"
-            "1. English excerpt\n"
-            "2. Hindi excerpt (Devanagari script)\n"
-            "3. Marathi excerpt (Devanagari script)\n"
-            'Output a JSON list of 3 strings: ["english excerpt", "hindi excerpt", "marathi excerpt"]. Output ONLY valid JSON.'
-        )
-        resp = await llm.complete([
-            Message(role="system", content=sys_msg),
-            Message(role="user", content=f"Query: {query}\nEnglish Context: {expanded.get('english')}")
-        ])
-        clean_json = resp.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        snippets = json.loads(clean_json)
-        if isinstance(snippets, list) and len(snippets) > 0:
-            valid_snippets = [s.strip() for s in snippets if isinstance(s, str) and s.strip()]
-            logger.info("Generated Tri-Lingual HyDE snippets for '%s': %s", query, valid_snippets)
-            return valid_snippets
-        return [expanded.get("english", query), expanded.get("hindi", query), expanded.get("marathi", query)]
-    except Exception as e:
-        logger.warning("Tri-lingual HyDE generation failed: %s", e)
-        return [expanded.get("english", query)]
+_DEVANAGARI_RE = re.compile(r"[ऀ-ॿ]")
+
+
+def _pick_secondary_rerank_probe(query: str, expanded: dict) -> str | None:
+    """Pick the cross-script counterpart of the user's query to use as the
+    reranker's second probe.
+
+    Measured live 2026-09-18 against this corpus: Cohere scores a
+    Devanagari query at ~0.000 against the very chunks that answer it
+    ('वक्फ मालमत्तेची यादी' -> top rerank score 0.0005, 0/19 candidates
+    cleared the 0.15 threshold), while the English form of that same
+    query scored 0.91 and passed 17/17 on the same candidate set. Vector
+    retrieval is fine either way (top cosine 0.62 vs 0.61) -- it is only
+    the rerank stage that collapses, so a Devanagari query used to return
+    "no matches" for content the system had already found.
+
+    The old rule always paired the query with the Marathi variant, which
+    for a Devanagari query is the same script as the query itself: two
+    near-zero probes and no results. Pairing across scripts fixes that.
+    Deliberately ONE secondary probe, not both variants: each probe is a
+    separate rerank call and the Cohere trial key allows 10/minute.
+    """
+    q_en = (expanded.get("english") or "").strip()
+    q_mr = (expanded.get("marathi") or "").strip()
+    secondary = q_en if _DEVANAGARI_RE.search(query) else q_mr
+    return secondary if secondary and secondary != query else None
+
+
+async def _generate_trilingual_hyde(query: str, expanded: dict, _attempts: int = 2) -> list[str]:
+    """Generate realistic hypothetical document excerpts (HyDE) in English, Hindi, and Marathi.
+
+    Retried like _expand_trilingual_query, and for the same reason: this is
+    the last retrieval leg before a search gives up, so a single flaky LLM
+    draw here is the difference between real results and a "no matches"
+    answer. Confirmed live 2026-09-18 -- the identical Devanagari query
+    returned 2 results at 08:56 and 0 at 09:03, the failing run logging
+    hyde_success=false after one bad sample.
+    """
+    llm = get_llm_provider()
+    sys_msg = (
+        "You are an AI document intelligence system. Generate realistic, formal 1-sentence hypothetical document excerpts "
+        "or record lines that directly answer the query in 3 languages:\n"
+        "1. English excerpt\n"
+        "2. Hindi excerpt (Devanagari script)\n"
+        "3. Marathi excerpt (Devanagari script)\n"
+        'Output a JSON list of 3 strings: ["english excerpt", "hindi excerpt", "marathi excerpt"]. Output ONLY valid JSON.'
+    )
+
+    last_error: Exception | None = None
+    for attempt in range(_attempts):
+        try:
+            resp = await llm.complete([
+                Message(role="system", content=sys_msg),
+                Message(role="user", content=f"Query: {query}\nEnglish Context: {expanded.get('english')}")
+            ])
+            clean_json = resp.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            snippets = json.loads(clean_json)
+            if isinstance(snippets, list) and len(snippets) > 0:
+                valid_snippets = [s.strip() for s in snippets if isinstance(s, str) and s.strip()]
+                if valid_snippets:
+                    logger.info("Generated Tri-Lingual HyDE snippets for '%s': %s", query, valid_snippets)
+                    return valid_snippets
+            raise ValueError(f"HyDE response parsed but yielded no usable snippets: {clean_json[:200]}")
+        except Exception as e:
+            last_error = e
+            logger.warning("Tri-lingual HyDE generation attempt %d/%d failed: %s", attempt + 1, _attempts, e)
+            if attempt + 1 < _attempts:
+                await asyncio.sleep(1.5)
+
+    # Degraded fallback: embed the expansion variants we already have rather
+    # than the English one alone. On a Devanagari query the English variant
+    # is the single worst probe to fall back to -- the Hindi/Marathi variants
+    # are what actually match this corpus's Devanagari OCR text.
+    logger.warning("Tri-lingual HyDE generation failed after %d attempt(s): %s", _attempts, last_error)
+    fallback = [expanded.get("english"), expanded.get("hindi"), expanded.get("marathi"), query]
+    deduped: list[str] = []
+    for s in fallback:
+        if isinstance(s, str) and s.strip() and s.strip() not in deduped:
+            deduped.append(s.strip())
+    return deduped
 
 
 async def search(
@@ -706,9 +784,10 @@ async def search(
             # parallelization opportunities in this pipeline (see the
             # asyncio.create_task comment at the top of search() for why
             # most of the rest is genuinely sequential).
-            if q_mr and q_mr != query:
+            secondary_probe = _pick_secondary_rerank_probe(query, expanded)
+            if secondary_probe:
                 primary_task = asyncio.create_task(reranker.rerank(query, doc_texts, top_n=len(doc_texts)))
-                trans_task = asyncio.create_task(reranker.rerank(q_mr, doc_texts, top_n=len(doc_texts)))
+                trans_task = asyncio.create_task(reranker.rerank(secondary_probe, doc_texts, top_n=len(doc_texts)))
                 try:
                     reranked_primary = await primary_task
                 except Exception:
@@ -795,9 +874,10 @@ async def search(
                             # pass above — see that comment for the root cause.
                             # Same primary/translated concurrency fix too —
                             # see the direct-search pass's asyncio comment.
-                            if q_mr and q_mr != query:
+                            hyde_secondary_probe = _pick_secondary_rerank_probe(query, expanded)
+                            if hyde_secondary_probe:
                                 primary_task = asyncio.create_task(reranker.rerank(query, doc_texts, top_n=len(doc_texts)))
-                                trans_task = asyncio.create_task(reranker.rerank(q_mr, doc_texts, top_n=len(doc_texts)))
+                                trans_task = asyncio.create_task(reranker.rerank(hyde_secondary_probe, doc_texts, top_n=len(doc_texts)))
                                 try:
                                     reranked_primary = await primary_task
                                 except Exception:

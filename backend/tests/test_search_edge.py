@@ -1,5 +1,9 @@
+import asyncio
+import json
 import pytest
 import uuid
+from unittest.mock import AsyncMock
+import app.services.search_service as search_service_mod
 from app.ai.base import RankedResult
 from app.services.search_service import search, _condense_excerpt_text, _expand_trilingual_query, _select_relevant_ranks
 from app.services.chat_service import _extract_score_threshold, _is_explicit_search_intent
@@ -43,6 +47,39 @@ def test_condense_excerpt_text_handles_no_blank_lines():
     assert _condense_excerpt_text("line one\nline two") == "line one\nline two"
 
 
+async def _expand_trilingual_query_with_test_retry(query: str, max_attempts: int = 4) -> dict:
+    """Test-only retry wrapper around _expand_trilingual_query itself (on
+    top of that function's own internal retry).
+
+    Found live, 2026-09-15: within the full suite, this call's Groq
+    response occasionally comes back with ZERO HTTP headers at all (not
+    just a near-zero rate-limit count) -- real Groq responses always carry
+    x-ratelimit-* headers, so a headerless response points at connection/
+    event-loop contention from this suite's own heavy concurrent load
+    (real PaddleOCR inference and embedding calls sharing the process with
+    async LLM I/O elsewhere in the run), not the prompt/parsing logic this
+    test actually exists to guard, and not a clean, header-bearing Groq
+    rate-limit response the in-function backoff is designed for. A spaced
+    retry AT THE TEST LEVEL -- full seconds apart, independent fresh
+    connections -- rides out that transient contention instead of either
+    ignoring it (flaky test) or faking the LLM's answer (defeats the
+    test's actual purpose, which is checking the real prompt's behavior)."""
+    result = None
+    for attempt in range(max_attempts):
+        result = await _expand_trilingual_query(query)
+        # _expand_trilingual_query's own call-failed fallback returns the
+        # raw query unchanged in all three of english/hindi/marathi -- a
+        # real LLM response essentially never does that (it normalizes/
+        # translates), so this is a precise way to tell "the call failed"
+        # from "the model genuinely produced this."
+        is_fallback = result["english"] == query and result["hindi"] == query and result["marathi"] == query
+        if not is_fallback:
+            return result
+        if attempt + 1 < max_attempts:
+            await asyncio.sleep(5)
+    return result
+
+
 @pytest.mark.asyncio
 async def test_expand_trilingual_query_honors_explicit_response_language_request():
     """Live bug, 2026-09-04: a query like "Explain this document in
@@ -55,6 +92,14 @@ async def test_expand_trilingual_query_honors_explicit_response_language_request
     detected_lang."""
     expanded = await _expand_trilingual_query("Explain this document in Marathi")
     assert expanded["detected_lang"].lower() == "english"
+    if expanded["response_lang"].lower() != "marathi":
+        # See _expand_trilingual_query_with_test_retry's docstring -- a
+        # first-attempt "english"/"english" pair this query should never
+        # produce (it unambiguously names Marathi) is the fallback shape
+        # for a failed LLM call, not a genuine model disagreement, so
+        # retry with real spacing before treating it as a failure.
+        expanded = await _expand_trilingual_query_with_test_retry("Explain this document in Marathi")
+    assert expanded["detected_lang"].lower() == "english"
     assert expanded["response_lang"].lower() == "marathi"
 
 
@@ -64,6 +109,11 @@ async def test_expand_trilingual_query_response_lang_defaults_to_detected_lang()
     must just track whatever language the query itself was written in,
     not silently default to English."""
     expanded = await _expand_trilingual_query("गावाचे नाव काय आहे?")
+    if expanded["detected_lang"].lower() not in ("marathi", "hindi"):
+        # Same rationale as the sibling test above: a Devanagari-script
+        # query landing on "english" is the call-failed fallback shape,
+        # not a real model judgment call -- retry with real spacing.
+        expanded = await _expand_trilingual_query_with_test_retry("गावाचे नाव काय आहे?")
     assert expanded["detected_lang"].lower() in ("marathi", "hindi")
     assert expanded["response_lang"].lower() == expanded["detected_lang"].lower()
 
@@ -223,7 +273,7 @@ async def test_search_structured_record_leg_finds_field_absent_from_chunk_text()
 
 
 @pytest.mark.asyncio
-async def test_two_chunks_sharing_a_page_both_reach_the_grounding_llm():
+async def test_two_chunks_sharing_a_page_both_reach_the_grounding_llm(monkeypatch):
     """Live bug, 2026-09-04: TextChunker splits a long page into
     consecutive, mostly-DISTINCT chunks (512 tokens, only 64 overlapping)
     -- not near-duplicates. But search()'s results-list dedup collapses
@@ -238,7 +288,15 @@ async def test_two_chunks_sharing_a_page_both_reach_the_grounding_llm():
     This reproduces that shape with two page-1 chunks holding distinct,
     unambiguous marker facts, and asserts BOTH make it into the grounded
     answer's citations -- not just whichever one the results-list dedup
-    would have kept."""
+    would have kept.
+
+    The LLM is mocked (found flaky 2026-09-15: this test hit the real Groq
+    API with no mocking, so it was really asserting "did the live model
+    choose to cite both excerpts in its free-text answer" on top of the
+    thing it's actually meant to guard -- whether search()'s dedup logic
+    even OFFERED both chunks to the grounding call. A fake, deterministic
+    LLM response isolates the real regression (excerpts reaching the
+    prompt) from unrelated model non-determinism."""
     async with AsyncSessionLocal() as db:
         try:
             tenant_id = uuid.uuid4()
@@ -269,6 +327,23 @@ async def test_two_chunks_sharing_a_page_both_reach_the_grounding_llm():
             )
             db.add_all([chunk_a, chunk_b])
             await db.commit()
+
+            # Deterministic stand-in for the real Groq grounding call --
+            # cites excerpt 1 and excerpt 2 as two separate claims,
+            # whichever physical chunk each excerpt slot ends up holding.
+            # Also serves the earlier _expand_trilingual_query call inside
+            # search(): its parser falls back to the English/English
+            # defaults for any key this shape is missing, so one fake
+            # response safely covers both LLM call sites.
+            fake_llm = AsyncMock()
+            fake_llm.complete = AsyncMock(return_value=json.dumps({
+                "answerable": True,
+                "claims": [
+                    {"text": "The village name is Rampur.", "sources": [1]},
+                    {"text": "The district name is Solapur.", "sources": [2]},
+                ],
+            }))
+            monkeypatch.setattr(search_service_mod, "get_llm_provider", lambda: fake_llm)
 
             res = await search(
                 query="What are the ZorbaxVillageMarker and QuindleDistrictMarker values?",

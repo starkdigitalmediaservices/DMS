@@ -17,8 +17,9 @@ export const metadata: Metadata = {
   description: "DMS Ai verification system",
   icons: {
     icon: [
-      { url: "/favicon.ico" },
-      { url: "/icon.png", type: "image/png", sizes: "32x32" },
+      { url: "/stark-icon-32.png", type: "image/png", sizes: "32x32" },
+      { url: "/stark-icon-16.png", type: "image/png", sizes: "16x16" },
+      { url: "/favicon.ico", sizes: "any" },
     ],
     apple: [
       { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },

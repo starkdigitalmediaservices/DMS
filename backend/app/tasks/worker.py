@@ -145,9 +145,11 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
 
         if not chunks or all(p.get("extraction_failed") for p in pages):
             raise ValueError(
-                "No readable text could be extracted from this document. "
-                "It may be a scanned image requiring an OCR provider "
-                "(set AI_OCR_PROVIDER=gcv or llamaparse)."
+                "No readable text could be extracted from this document "
+                f"using the configured OCR provider (AI_OCR_PROVIDER={settings.ai_ocr_provider}). "
+                "The file may be corrupt, empty, or an image quality the "
+                "OCR model can't read. Local options: paddleocr. "
+                "API-based options: chandra, llamaparse."
             )
 
         # TS2 — data-loss audit: does every word OCR read survive into the

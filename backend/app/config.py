@@ -3,10 +3,25 @@ from pydantic_settings import BaseSettings
 from typing import Literal, List
 import json
 
+# The webhook secret this repo ships with. Kept as a named constant so the
+# production validator can recognise "still the default" without the literal
+# being written twice and silently drifting apart.
+_SHIPPED_EMAIL_WEBHOOK_SECRET = '64d229d63ce4b83a0ec981703a1be25fc256fc6a1174bc31ce8591a98ee28750'
+
+
 class Settings(BaseSettings):
     # App
     app_env: Literal['development', 'production', 'test'] = 'development'
     cors_origins: List[str] = ['*']
+
+    # Logging. log_level drives the app's own loggers (see main.py, which is
+    # where logging actually gets configured — before this existed nothing
+    # configured it at all, so the root WARNING default silently swallowed
+    # every logger.info in the codebase). sql_log_level is separate because
+    # SQLAlchemy's engine logger echoes every statement AND every bound
+    # parameter list, which drowns the app's own lines at INFO.
+    log_level: str = 'INFO'
+    sql_log_level: str = 'WARNING'
     
     # File Upload limits
     max_upload_size_mb: int = 50
@@ -154,6 +169,17 @@ class Settings(BaseSettings):
     rate_limit_per_user: str = '60/minute'
     rate_limit_per_tenant: str = '1000/minute'
 
+    # Shared connector actor (demo scope, T40): every non-interactive
+    # ingestion source (SFTP, watched-folder, legacy IMAP, the email-inbound
+    # webhook, and the scanner connector's own actor fallback) attributes
+    # its documents to this one existing user/tenant rather than resolving
+    # a per-source mapping. Was previously a hardcoded, unconfigurable
+    # constant pointing at an email no seeded user actually has — every
+    # connector poll failed with "Connector actor not found" until this was
+    # pulled out into settings and given a real value in .env. Point this at
+    # an existing user's email for connectors to work at all.
+    connector_actor_email: str = 'teamworklax@gmail.com'
+
     # SFTP connector (demo scope: single fixed server/credentials/remote dir)
     sftp_enabled: bool = False
     sftp_host: str = 'sftp'
@@ -170,7 +196,7 @@ class Settings(BaseSettings):
 
     # Email-in webhook connector (Cloudflare Email Routing + Cloudflare Worker)
     email_webhook_enabled: bool = True
-    email_webhook_secret: str = '64d229d63ce4b83a0ec981703a1be25fc256fc6a1174bc31ce8591a98ee28750'
+    email_webhook_secret: str = _SHIPPED_EMAIL_WEBHOOK_SECRET
 
     # Legacy IMAP email connector (deprecated/disabled by default in main.py,
     # kept for local dev/GreenMail testing in docker-compose)
@@ -242,6 +268,39 @@ class Settings(BaseSettings):
             # enable it were never exposed to this in the first place.
             if self.scanner_enabled and self.scanner_webhook_secret == 'change_me_scanner_secret':
                 raise ValueError("In production, SCANNER_WEBHOOK_SECRET must be set to a real secret when scanner_enabled is true")
+
+            # Same exposure as the scanner secret above, but worse in two
+            # ways: email_webhook_enabled defaults to True (the scanner
+            # defaults to off), and this secret is the ONLY thing standing
+            # in front of /connectors/email-inbound, which ingests documents
+            # as the connector actor. A shipped default here means anyone
+            # who has read the source can post documents into the tenant.
+            if self.email_webhook_enabled and self.email_webhook_secret == _SHIPPED_EMAIL_WEBHOOK_SECRET:
+                raise ValueError(
+                    "In production, EMAIL_WEBHOOK_SECRET must be changed from the shipped default "
+                    "while EMAIL_WEBHOOK_ENABLED is true — it is the only authentication on the "
+                    "inbound email ingestion endpoint"
+                )
+
+            # Row-Level Security is the tenant isolation boundary. When
+            # app_postgres_url is empty, database.py falls back to the
+            # superuser connection, which BYPASSES RLS entirely — it logs a
+            # warning and carries on, which is the right call for a dev box
+            # and the wrong one for production, where it means every request
+            # runs with the ability to read any tenant's rows.
+            if not self.app_postgres_url:
+                raise ValueError(
+                    "In production, APP_POSTGRES_URL must point at the restricted (non-superuser) "
+                    "database role — without it every request bypasses Row-Level Security and "
+                    "tenant isolation is not enforced"
+                )
+
+            # '*' with credentialed requests means any origin can drive the
+            # API using a logged-in user's browser session.
+            if '*' in self.cors_origins:
+                raise ValueError(
+                    "In production, CORS_ORIGINS must list explicit origins rather than '*'"
+                )
         return self
     
     class Config:

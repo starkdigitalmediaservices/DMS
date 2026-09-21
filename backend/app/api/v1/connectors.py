@@ -10,14 +10,25 @@ router = APIRouter(prefix="/connectors", tags=["Connectors"])
 @router.get("/info")
 async def get_connector_info(current_user: TokenPayload = Depends(require_tenant_access)):
     """Connection details for the non-HTTP ingestion channels, so a user can hand
-    them to another machine without needing to ask an engineer for credentials."""
+    them to another machine without needing to ask an engineer for credentials.
+
+    The SFTP password is a shared service credential, not a per-user one:
+    it grants write access to the drop folder every tenant's connector
+    ingests from. This used to be returned in plaintext to any
+    authenticated caller of any role, so a read-only user in one tenant
+    could read it straight out of the API and drop files that land as
+    ingested documents. It is now only included for an it_admin — everyone
+    else gets the connection details they need and is told who to ask.
+    """
+    is_admin = current_user.role == "it_admin"
     return {
         "sftp": {
             "enabled": settings.sftp_enabled,
             "host": settings.sftp_external_host,
             "port": settings.sftp_external_port,
             "username": settings.sftp_username,
-            "password": settings.sftp_password,
+            "password": settings.sftp_password if is_admin else None,
+            "password_hint": None if is_admin else "Ask an IT admin for the SFTP password.",
             "remote_dir": settings.sftp_remote_dir,
             "note": "Both machines must be on the same network. Drop a file into "
                     "this folder from any SFTP client and it appears in your DMS "

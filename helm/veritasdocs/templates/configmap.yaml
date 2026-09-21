@@ -16,6 +16,15 @@ data:
   CORS_ORIGINS: {{ .Values.app.corsOrigins | quote }}
   AIR_GAPPED: {{ .Values.airGapped.enabled | quote }}
 
+  LOG_LEVEL: {{ .Values.app.logLevel | quote }}
+  SQL_LOG_LEVEL: {{ .Values.app.sqlLogLevel | quote }}
+
+  # The single account every non-interactive ingestion source attributes its
+  # documents to. It must name a user that exists in the target install, or
+  # every connector poll fails with "Connector actor not found" — which is
+  # exactly what the previously hardcoded default did.
+  CONNECTOR_ACTOR_EMAIL: {{ required "app.connectorActorEmail must be set to an existing user's email, or all connectors will fail" .Values.app.connectorActorEmail | quote }}
+
   S3_ENDPOINT_URL: "http://{{ include "veritasdocs.fullname" . }}-minio:9000"
   S3_PUBLIC_ENDPOINT_URL: "http://{{ include "veritasdocs.fullname" . }}-minio:9000"
   S3_BUCKET_NAME: {{ (index .Values.minio.buckets 0) | quote }}

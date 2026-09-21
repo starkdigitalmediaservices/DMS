@@ -173,6 +173,35 @@ services:
     networks:
       - default
 
+  # Celery Beat — the scheduler that actually fires celery_app.conf.beat_schedule.
+  # Without it the worker above only ever runs tasks something else enqueues, so
+  # the daily 30-day trash purge (app.tasks.cleanup_trashed_items_task) was
+  # defined but had never once run. Beat only enqueues; the worker executes.
+  # Keep exactly one replica — two beats means every scheduled task fires twice.
+  beat:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend:/app
+      - celery_beat_state:/var/lib/celery
+    working_dir: /app
+    command: >
+      sh -c "celery -A app.tasks.worker.celery_app beat --loglevel=info
+      --schedule /var/lib/celery/celerybeat-schedule"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - default
+
   flower:
     build: ./backend
     ports:
@@ -225,6 +254,9 @@ volumes:
   hf_cache:
   sftp_data:
   connector_state:
+  # Beat's own schedule//last-run-time database. Persisted so a restart doesn't
+  # re-fire (or silently skip) a daily task depending on when it came back up.
+  celery_beat_state:
 
 networks:
   default:

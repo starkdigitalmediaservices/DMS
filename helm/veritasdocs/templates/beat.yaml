@@ -1,0 +1,72 @@
+{{/*
+Celery Beat — the scheduler that fires celery_app.conf.beat_schedule (today:
+the daily 30-day trash purge). The worker Deployment only executes whatever is
+already on the queue; without Beat nothing ever enqueues a scheduled task, so
+the purge silently never ran.
+
+replicas is intentionally pinned to 1 and NOT exposed as a tunable: a second
+Beat means every scheduled task fires twice. Scaling scheduled throughput is
+done by scaling the worker, which is what actually executes the tasks.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "veritasdocs.fullname" . }}-beat
+  labels:
+    {{- include "veritasdocs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beat
+spec:
+  replicas: 1
+  strategy:
+    # Never run two Beats concurrently, not even briefly during a rollout —
+    # the overlap window of a RollingUpdate is enough to double-fire a task.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "veritasdocs.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: beat
+  template:
+    metadata:
+      labels:
+        {{- include "veritasdocs.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: beat
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: beat
+          image: {{ include "veritasdocs.image" (dict "registry" .Values.image.registry "repository" .Values.image.backend.repository "tag" .Values.image.backend.tag) }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - app.tasks.worker.celery_app
+            - beat
+            - --loglevel=info
+            # Keep the schedule DB on the writable emptyDir below: the default
+            # location is the image's working directory, which is read-only in
+            # a hardened pod and would crash Beat on startup.
+            - --schedule
+            - /var/lib/celery/celerybeat-schedule
+          envFrom:
+            - configMapRef:
+                name: {{ include "veritasdocs.fullname" . }}-config
+          env:
+            {{- include "veritasdocs.appEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: beat-state
+              mountPath: /var/lib/celery
+          resources:
+            {{- toYaml .Values.beat.resources | nindent 12 }}
+      volumes:
+        # emptyDir, not a PVC: the file only holds each entry's last-run time.
+        # Losing it on reschedule costs at most one extra run of an idempotent
+        # cleanup task, which is cheaper than carrying a ReadWriteOnce volume
+        # that would block the Recreate rollout above.
+        - name: beat-state
+          emptyDir: {}

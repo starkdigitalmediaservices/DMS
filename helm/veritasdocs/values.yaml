@@ -38,6 +38,19 @@ airGapped:
 app:
   env: production
   corsOrigins: '["http://localhost:3000"]'
+
+  logLevel: INFO
+  # SQLAlchemy echoes every statement and its bound parameters at INFO, which
+  # drowns the application's own log lines. Raise only when debugging SQL.
+  sqlLogLevel: WARNING
+
+  # REQUIRED: email of an existing user in this install. Every connector
+  # (SFTP, watched-folder, email-in, scanner) attributes ingested documents
+  # to this account; if no user has this email, every connector poll fails.
+  # Deliberately empty so a deploy fails loudly at template time rather than
+  # silently shipping a placeholder that breaks ingestion at runtime.
+  connectorActorEmail: ""
+
   ai:
     llmProvider: openai
     embedProvider: bgem3
@@ -147,6 +160,14 @@ worker:
   resources:
     requests: { cpu: 500m, memory: 2Gi }
     limits: { cpu: "2", memory: 6Gi }
+
+# Celery Beat (scheduler). No `replicas` key on purpose — it is pinned to 1 in
+# the template because a second Beat double-fires every scheduled task. It only
+# enqueues, never executes, so it needs far less than a worker.
+beat:
+  resources:
+    requests: { cpu: 50m, memory: 256Mi }
+    limits: { cpu: 250m, memory: 512Mi }
 
 flower:
   enabled: true

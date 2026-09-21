@@ -179,7 +179,32 @@ breaks unattended backups:
 | **Silence** | cron mails output nobody reads, so everything lands in `backups/backup.log` |
 
 Tunables: `DMS_BACKUP_DIR`, `DMS_BACKUP_KEEP` (default 7),
-`DMS_BACKUP_MIN_FREE_MB` (default 3000), `DMS_BACKUP_LOG`.
+`DMS_BACKUP_MIN_FREE_MB` (default 3000), `DMS_BACKUP_LOG`,
+`DMS_BACKUP_REQUIRE_MOUNT`.
+
+### Moving backups to a separate volume
+
+**As of 2026-09-21 this host has no second volume.** One disk (`sda`, 238.5 GB):
+`sda1` → `/`, `sda2` → 1 GB EFI, `sda3` → swap. No unmounted partitions, no
+network mounts in `fstab`, `/media/stark` and `/mnt` empty. Backups therefore
+sit on the same filesystem as the data they protect — one disk failure loses
+both. **This is the largest remaining gap in the DR story**, and it needs
+hardware, not code.
+
+Once real storage exists, point the job at it and turn on the mount check:
+
+```cron
+15 2 * * * DMS_BACKUP_DIR=/mnt/backup/dms DMS_BACKUP_REQUIRE_MOUNT=1 \
+           DMS_BACKUP_KEEP=7 /path/to/DMS/scripts/dr/cron-backup.sh
+```
+
+`DMS_BACKUP_REQUIRE_MOUNT=1` is not optional paranoia. An external disk or
+network share that fails to mount leaves an ordinary empty directory at the
+same path, so the backup writes happily to the root filesystem instead —
+quietly filling the disk it was moved off, while the operator believes backups
+are landing elsewhere. Both the "backups are offsite" and the "root has space"
+assumptions are false at once, and nothing says so until something breaks. With
+the flag set, the job refuses to run and logs `BACKUP-FAILED`.
 
 A backup that fails its own verification is **kept and renamed**
 `<stamp>.UNVERIFIED` rather than deleted — the evidence is worth more than the

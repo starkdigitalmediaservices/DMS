@@ -131,7 +131,12 @@ services:
       - ./backend:/app
       - hf_cache:/root/.cache/huggingface
       - ./connector_inbox/watched_folder:/app/watched_inbox
-      - "/home/stark/Stark Drive :/app/stark_drive_inbox"
+      # NOTE: no space before the colon. It used to read "Stark Drive :/app/..."
+      # and Docker took the trailing space as part of the host path, creating a
+      # directory literally named "Stark Drive " — so this watch source pointed
+      # at a phantom folder and anything dropped in the user's real ~/Stark Drive
+      # was never ingested.
+      - "/home/stark/Stark Drive:/app/stark_drive_inbox"
       - connector_state:/app/_state
     working_dir: /app
     command: >

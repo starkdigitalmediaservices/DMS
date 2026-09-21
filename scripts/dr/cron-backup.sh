@@ -20,6 +20,8 @@
 #   DMS_BACKUP_DIR      where backups are written   (default: <repo>/backups)
 #   DMS_BACKUP_KEEP     how many to retain          (default: 7)
 #   DMS_BACKUP_MIN_FREE_MB  refuse to run below this free space (default: 3000)
+#   DMS_BACKUP_REQUIRE_MOUNT  set to 1 when DMS_BACKUP_DIR lives on a separate
+#                             disk, USB or network share — see below
 #
 set -uo pipefail
 
@@ -59,6 +61,20 @@ command -v docker >/dev/null 2>&1 || fail "docker not on PATH ($PATH)"
 
 docker compose ps --status running --format '{{.Service}}' 2>/dev/null \
     | grep -qx postgres || fail "postgres container is not running — nothing to back up"
+
+# When the backup target is meant to be a separate volume, verify it is
+# actually mounted. An external disk or network share that failed to mount
+# leaves an ordinary empty directory at the same path, so the backup writes
+# happily to the root filesystem instead — quietly filling the disk it was
+# moved off, while the operator believes backups are landing on the other
+# volume. Both the "backups are offsite" and the "root has space" assumptions
+# are false at once, and nothing says so until something breaks.
+if [ "${DMS_BACKUP_REQUIRE_MOUNT:-0}" = "1" ]; then
+    mountpoint -q "$BACKUP_DIR" \
+        || fail "DMS_BACKUP_REQUIRE_MOUNT=1 but $BACKUP_DIR is not a mount point — \
+the backup volume is not mounted. Refusing to write to the underlying filesystem."
+    log "mount check ok ($BACKUP_DIR is a mount point)"
+fi
 
 FREE_MB=$(df -Pm "$BACKUP_DIR" | awk 'NR==2 {print $4}')
 if [ "${FREE_MB:-0}" -lt "$MIN_FREE_MB" ]; then

@@ -502,7 +502,15 @@ async def search(
     ip_address: str,
     rerank_provider: str | None = None,
     generate_summary: bool = True,
+    on_results=None,
 ) -> SearchResponse:
+    """on_results: optional async callback invoked with the assembled
+    SearchResult list as soon as retrieval and reranking finish, BEFORE the
+    grounded-answer LLM call. Measured warm, results are ready at ~1.8s while
+    the summary lands at ~5s, so a caller that can render progressively (see
+    the /search/stream endpoint) shows documents ~3s earlier. Nothing about
+    the returned SearchResponse changes; a caller that passes no callback
+    behaves exactly as before."""
     start_time = time.time()
 
     # Phase stopwatch. Uncached searches were measured at 7-41s on a warm,
@@ -1324,6 +1332,16 @@ async def search(
     pending_title_task = asyncio.create_task(_find_pending_title_matches(db, tenant_id, query, exclude_doc_ids=already_found))
 
     _mark("assemble-results")
+
+    # Hand the finished results to a progressive caller before spending the
+    # ~3s on the grounded answer. Best-effort: a consumer that has gone away
+    # (client disconnected mid-stream) must not abort a search that is
+    # otherwise about to succeed and be cached.
+    if on_results is not None:
+        try:
+            await on_results(list(final_results))
+        except Exception as e:
+            logger.warning("on_results callback failed, continuing search: %s", e)
 
     # 7. Generate the AI answer — T70: every claim bound to a source excerpt,
     # refuse outright rather than guess when the excerpts don't answer it.

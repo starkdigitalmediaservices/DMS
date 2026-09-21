@@ -73,12 +73,51 @@ is found at all. The documents are Marathi; an English probe scores them near
 zero. Halving the API calls would have halved the latency and destroyed
 recall.
 
+## Progressive delivery (`POST /api/v1/search/stream`)
+
+The documents are ready well before the answer, so the streaming endpoint
+stops making the user wait for the slower half. Server-Sent Events:
+
+```
+event: results   the ranked documents, as soon as they exist
+event: summary   the grounded answer + citations, once verified
+event: done      timings and flags
+event: error     something failed; the stream ends
+```
+
+Measured on one warm request: **results at 3.17 s, summary at 4.37 s.** The
+gap is the win, and it grows exactly when it matters — a throttled summary
+measured at 17 s and at 56 s in this session, and in both cases the documents
+would still have appeared in a couple of seconds.
+
+The web UI uses it (`api.search.queryStream`) and renders results the moment
+they arrive. It falls back to the blocking endpoint automatically on any
+transport or parse failure, so a proxy that buffers SSE degrades to the old
+behaviour instead of breaking search. `X-Accel-Buffering: no` is set for the
+same reason.
+
+### Why the answer is not streamed token by token
+
+It is not free-form prose. `_generate_grounded_answer` asks the model for
+structured claims, then **verifies each one** — every number in a claim must
+appear in the excerpt it cites — **drops** the claims that fail, and numbers
+the citations only once the surviving set is known. If nothing survives, the
+whole answer becomes a refusal.
+
+Streaming raw tokens would emit JSON rather than readable text, show claims
+that verification is about to discard, and could show an answer that is then
+retracted. That trades the product's grounding guarantee for perceived speed.
+
+Streaming per **verified claim** is compatible with this design, because
+citation numbers are assigned in first-appearance order as claims are
+accepted. It needs streaming support in the LLM provider, which does not
+exist yet — providers expose `complete()` only. That is the natural next
+step if the ~3 s answer still feels slow once results appear immediately.
+
 ## What would actually help next
 
 1. **Paid Cohere key** — removes the binding constraint. Largest single win.
-2. **Stream the summary.** It is now the biggest block (~3 s) and the user
-   waits for the whole response. Streaming tokens changes perceived latency
-   far more than shaving milliseconds, but it is an API contract change.
+2. **Per-verified-claim streaming** of the answer (see above).
 3. **Skip the summary when the caller does not need it.** `generate_summary`
    already exists; a "results only" mode would return in ~1.5 s warm.
 4. **A local reranker was measured and rejected** — the bundled BGE-M3

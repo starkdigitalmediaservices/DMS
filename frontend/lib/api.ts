@@ -1,6 +1,6 @@
 import { getAccessToken, getUserProfile, setUserProfile, clearTokens } from "./auth";
 import { offlineStore } from "./offlineStore";
-import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem } from "@/types";
+import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, SearchResult, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem } from "@/types";
 
 export const getBaseUrl = (): string => {
   if (typeof window !== "undefined") {
@@ -420,6 +420,90 @@ export const api = {
           generate_summary: generateSummary,
         }),
       });
+    },
+
+    // Progressive variant of query(). The documents are ready well before the
+    // grounded answer (the answer costs an extra LLM round-trip), so this
+    // reports them as soon as they exist instead of making the user wait for
+    // the slower half. onResults may fire before onSummary by several
+    // seconds; when the summary provider is throttled it can be much longer,
+    // which is exactly when showing results early matters most.
+    //
+    // Falls back to the blocking endpoint on any transport/parse failure, so
+    // a proxy that buffers SSE degrades to the old behaviour rather than
+    // breaking search.
+    queryStream: async (
+      query: string,
+      handlers: {
+        onResults?: (results: SearchResult[]) => void;
+        onSummary?: (summary: Partial<SearchResponse>) => void;
+      },
+      limit: number = 5,
+      filters: any = null,
+      rerankProvider: "cohere" | "bgem3" | null = null,
+      generateSummary: boolean = true
+    ): Promise<SearchResponse> => {
+      const body = JSON.stringify({
+        query, limit, filters,
+        rerank_provider: rerankProvider,
+        generate_summary: generateSummary,
+      });
+
+      try {
+        const res = await fetch(`${getBaseUrl()}/api/v1/search/stream`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "ngrok-skip-browser-warning": "true",
+            Authorization: `Bearer ${getAccessToken()}`,
+          },
+          body,
+        });
+        if (!res.ok || !res.body) throw new Error(`stream HTTP ${res.status}`);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const assembled: any = { query, results: [], ai_summary: "", citations: [] };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE frames are separated by a blank line; keep the trailing
+          // partial frame in the buffer until its terminator arrives.
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop() ?? "";
+
+          for (const frame of frames) {
+            let event = "";
+            let data = "";
+            for (const line of frame.split("\n")) {
+              if (line.startsWith("event: ")) event = line.slice(7).trim();
+              else if (line.startsWith("data: ")) data += line.slice(6);
+            }
+            if (!event || !data) continue;
+            const payload = JSON.parse(data);
+
+            if (event === "results") {
+              assembled.results = payload.results ?? [];
+              handlers.onResults?.(assembled.results);
+            } else if (event === "summary") {
+              Object.assign(assembled, payload);
+              handlers.onSummary?.(payload);
+            } else if (event === "done") {
+              Object.assign(assembled, payload);
+            } else if (event === "error") {
+              throw new Error(payload.detail ?? "search stream failed");
+            }
+          }
+        }
+        return assembled as SearchResponse;
+      } catch (e) {
+        console.warn("Search stream unavailable, falling back to blocking search:", e);
+        return await api.search.query(query, limit, filters, rerankProvider, generateSummary);
+      }
     },
   },
   chat: {

@@ -426,8 +426,39 @@ export default function DrivePage() {
     setSearchQuery(query);
     setSearching(true);
     try {
-      const res = await api.search.query(query, 5, null, rerankProvider, generateSummary);
-      setSearchResponse(res);
+      // Progressive: render the documents the moment they arrive rather than
+      // waiting for the grounded answer, which costs an extra LLM round-trip
+      // and lands seconds later (much longer when that provider throttles).
+      // The summary then fills in underneath. queryStream falls back to the
+      // blocking endpoint by itself if SSE is unavailable.
+      const res = await api.search.queryStream(
+        query,
+        {
+          onResults: (results) => {
+            setSearchResponse((prev) => ({
+              ...(prev ?? {}),
+              query,
+              results,
+              ai_summary: "",
+              citations: [],
+              summaryPending: true,
+            } as any));
+            setShowRightChatDrawer(true);
+          },
+          onSummary: (summary) => {
+            setSearchResponse((prev) => ({
+              ...(prev ?? {}),
+              ...summary,
+              summaryPending: false,
+            } as any));
+          },
+        },
+        5,
+        null,
+        rerankProvider,
+        generateSummary
+      );
+      setSearchResponse({ ...(res as any), summaryPending: false });
       // AUTO-OPEN RIGHT-SIDE PERSISTENT CHAT JUST IN TIME ON SEARCH
       setShowRightChatDrawer(true);
     } catch (err) {

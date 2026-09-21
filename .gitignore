@@ -175,3 +175,6 @@ connector_inbox/
 /frontend/tests/a11y/.auth/
 /frontend/test-results/
 /frontend/playwright-report/
+
+# DR backup artifacts (large; keep out of git)
+backups/

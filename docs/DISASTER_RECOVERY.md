@@ -157,18 +157,63 @@ embeddings 1231/1231 present at 1024 dims (pgvector survives `pg_restore`),
 ## Scheduling
 
 Not wired into Celery Beat on purpose. A backup that runs inside the
-application dies with the application, exactly when you need it. Use the host's
-scheduler:
+application dies with the application, exactly when you need it. It runs from
+the host's cron, through `scripts/dr/cron-backup.sh`.
+
+**Installed on this host, 02:15 daily:**
 
 ```cron
-# 02:15 daily, keep 14 days
-15 2 * * * cd /path/to/DMS && ./scripts/dr/backup.sh >> /var/log/dms-backup.log 2>&1
-30 4 * * * find /path/to/DMS/backups -maxdepth 1 -type d -mtime +14 -exec rm -rf {} +
+15 2 * * * DMS_BACKUP_KEEP=7 DMS_BACKUP_MIN_FREE_MB=3000 /path/to/DMS/scripts/dr/cron-backup.sh
+```
+
+`cron-backup.sh` exists rather than calling `backup.sh` directly because cron
+introduces failure modes an interactive shell does not, and each one silently
+breaks unattended backups:
+
+| | Why the wrapper handles it |
+|---|---|
+| **PATH** | cron runs with a minimal PATH and no profile, so `docker` is often not found — the job "runs" nightly and produces nothing |
+| **CWD** | cron starts in `$HOME`, not the repo |
+| **Overlap** | a run takes ~5.5 min; `flock` stops a manual run colliding with the scheduled one (a skip logs and exits 0 — it is not a failure) |
+| **Disk** | refuses to start below `DMS_BACKUP_MIN_FREE_MB`. This host runs ~89% full; an unguarded nightly 320 MB write fills the root filesystem and takes the database down. The backup job becoming the outage is a bad trade |
+| **Silence** | cron mails output nobody reads, so everything lands in `backups/backup.log` |
+
+Tunables: `DMS_BACKUP_DIR`, `DMS_BACKUP_KEEP` (default 7),
+`DMS_BACKUP_MIN_FREE_MB` (default 3000), `DMS_BACKUP_LOG`.
+
+A backup that fails its own verification is **kept and renamed**
+`<stamp>.UNVERIFIED` rather than deleted — the evidence is worth more than the
+disk. Pruning only ever removes directories matching the exact timestamp shape
+this script writes, so anything else under `backups/` is untouched.
+
+### Monitoring
+
+```bash
+tail -f backups/backup.log              # watch a run
+grep BACKUP-FAILED backups/backup.log   # the string to alert on
+```
+
+`BACKUP-FAILED` is emitted for every abort — docker missing, postgres down,
+insufficient disk, or failed verification. Nothing here alerts you; wire that
+grep into whatever you already watch.
+
+### Verified on install, 2026-09-21
+
+Exercised under `env -i` (cron's stripped environment), not just interactively:
+
+```
+disk guard      refused to start, logged BACKUP-FAILED, exit 1
+overlap lock    second concurrent run skipped cleanly, exit 0
+full run        320 MB in 5m12s, all verification checks PASS
+prune           KEEP=1 -> pruned=2 retained=1, newest kept, disk reclaimed
+prune safety    an unrelated directory under backups/ was not matched
 ```
 
 `backups/` is gitignored. **A backup that never leaves the machine is not a
 backup** — ship `backups/<stamp>/` to separate storage (different host, object
-storage with versioning, or offline media). Nothing here does that for you.
+storage with versioning, or offline media). Nothing here does that for you, and
+on this host it matters twice over: the backups currently sit on the same 89%-
+full root filesystem as the data they protect.
 
 ---
 

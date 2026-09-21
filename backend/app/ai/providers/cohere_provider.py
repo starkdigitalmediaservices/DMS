@@ -1,6 +1,7 @@
 import cohere
 import logging
 from typing import List
+from cohere.core.request_options import RequestOptions
 from app.ai.base import RerankerProvider, EmbeddingProvider, RankedResult
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,16 @@ class CohereEmbeddingProvider(EmbeddingProvider):
         return 1024
 
 class CohereRerankerProvider(RerankerProvider):
+    # Bound how long a single rerank may hold up a search before the caller
+    # gives up and degrades to RRF order. Measured, 2026-09-21: on a rate-
+    # limited key the SDK's default retry-with-backoff turned one 429 into a
+    # 30-34s search (vs ~5s healthy), because nothing capped either the
+    # per-attempt timeout or the retry count. Search is user-facing and has
+    # a working unranked fallback, so failing fast and degrading beats
+    # stalling half a minute to maybe get scores.
+    REQUEST_TIMEOUT_SECONDS = 8.0
+    MAX_RETRIES = 1
+
     def __init__(self, api_key: str, model: str):
         self.api_key = api_key
         self.model = model
@@ -43,7 +54,11 @@ class CohereRerankerProvider(RerankerProvider):
                 model=self.model,
                 query=query,
                 documents=documents,
-                top_n=top_n
+                top_n=top_n,
+                request_options=RequestOptions(
+                    timeout_in_seconds=int(self.REQUEST_TIMEOUT_SECONDS),
+                    max_retries=self.MAX_RETRIES,
+                ),
             )
             
             results = []

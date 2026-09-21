@@ -57,6 +57,32 @@ def _select_relevant_ranks(reranked_primary: list, relevance_threshold: float, f
     return []
 
 
+def _unranked_fallback(merged, doc_texts, limit: int) -> List[RankedResult]:
+    """Build the result set used when the reranker is unavailable (rate
+    limited, timed out, misconfigured), preserving the RRF fusion order
+    the hybrid legs already produced.
+
+    This used to hand back score=0.0 for every row. The ORDER was still
+    RRF's, so results were sensibly ranked, but every caller — the API
+    response, the UI's relevance display — saw a flat zero and could not
+    tell a strong hybrid match from a weak one. RRF scores are tiny by
+    construction (sum of 1/(k+rank), k=60), so they're normalised against
+    the best candidate in this slice: relative strength survives, and the
+    0-1 shape stays comparable to a reranker score. The response's
+    `reranked: false` flag is what tells a consumer these came from fusion
+    rather than the cross-encoder — the score itself is no longer a lie.
+    """
+    candidates = merged[: limit * 2]
+    if not candidates:
+        return []
+    top_score = candidates[0][1] or 1.0
+    return [
+        RankedResult(index=i, score=(rrf_score / top_score), text=doc_texts[i])
+        for i, (_cid, rrf_score) in enumerate(candidates)
+        if i < len(doc_texts)
+    ]
+
+
 def _make_snippet(content: str, max_chars: int = 400) -> str:
     """Truncate result snippet around boundary to keep payload light."""
     if not content or len(content) <= max_chars:
@@ -457,6 +483,22 @@ async def search(
 ) -> SearchResponse:
     start_time = time.time()
 
+    # Phase stopwatch. Uncached searches were measured at 7-41s on a warm,
+    # idle box while every individual component profiled fast in isolation
+    # (embed 0.22s warm, rerank ~0.5s, LLM ~0.9s) — meaning the cost is
+    # spread across the pipeline rather than sitting in one call, and there
+    # was no way to tell which phase owned it from the outside because only
+    # a single total took_ms was ever recorded. These marks make the
+    # breakdown visible in the logs so a slow search can be diagnosed from
+    # production evidence instead of re-derived by hand each time.
+    _phase_marks: list[tuple[str, float]] = []
+    _phase_last = [start_time]
+
+    def _mark(label: str) -> None:
+        now = time.time()
+        _phase_marks.append((label, now - _phase_last[0]))
+        _phase_last[0] = now
+
     search_mode = "direct"
     hyde_triggered = False
     hyde_success = False
@@ -510,9 +552,12 @@ async def search(
     q_hi = expanded.get("hindi", query)
     q_mr = expanded.get("marathi", query)
 
+    _mark("expand+glossary")
+
     embed_provider = get_embed_provider()
     tri_queries = list(dict.fromkeys([q_en, q_hi, q_mr, query, *glossary_terms]))
     q_embeddings = await embed_provider.embed(tri_queries)
+    _mark(f"embed(x{len(tri_queries)})")
 
     # Build filter clauses dynamically for hybrid search
     filter_clauses = []
@@ -756,6 +801,8 @@ async def search(
         docs_map[cid] = row
         rrf_scores[cid] = rrf_scores.get(cid, 0) + (1.0 / (k + rank + 1))
 
+    _mark("retrieval-legs(db)")
+
     merged = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:20]
     relevant_ranks = []
     if merged:
@@ -813,10 +860,7 @@ async def search(
         except Exception as e:
             logger.error("Reranker unavailable (%s) — falling back to unranked RRF order: %s", reranker.__class__.__name__, e)
             reranked = False
-            relevant_ranks = [
-                RankedResult(index=i, score=0.0, text=t)
-                for i, t in enumerate(doc_texts[:limit * 2])
-            ]
+            relevant_ranks = _unranked_fallback(merged, doc_texts, limit)
 
         if relevant_ranks:
             vec_cids = {str(r.id) for r in all_vec_rows}
@@ -908,10 +952,10 @@ async def search(
                         except Exception as e:
                             logger.error("Reranker unavailable (%s) — falling back to unranked RRF order: %s", reranker.__class__.__name__, e)
                             reranked = False
-                            relevant_ranks = [
-                                RankedResult(index=i, score=0.0, text=t)
-                                for i, t in enumerate(doc_texts[:limit * 2])
-                            ]
+                            # hyde_merged, not merged: on this path doc_texts was
+                            # built from the HyDE candidate set, so the scores have
+                            # to come from the same list the texts are indexed against.
+                            relevant_ranks = _unranked_fallback(hyde_merged, doc_texts, limit)
 
                         if relevant_ranks:
                             merged = hyde_merged
@@ -1278,8 +1322,16 @@ async def search(
             grounded = False
 
     final_results.extend(await pending_title_task)
+    _mark("rerank+summary")
 
     took_ms = int((time.time() - start_time) * 1000)
+    if _phase_marks:
+        logger.info(
+            "search timing: total=%dms | %s | mode=%s reranked=%s hyde=%s",
+            took_ms,
+            " ".join(f"{label}={secs * 1000:.0f}ms" for label, secs in _phase_marks),
+            search_mode, reranked, hyde_triggered,
+        )
 
     resp = SearchResponse(
         query=query,

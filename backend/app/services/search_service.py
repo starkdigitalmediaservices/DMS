@@ -7,7 +7,11 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text, select
 from app.schemas.search import SearchResponse, SearchResult, Citation
-from app.services.cache_service import get_cached_search, cache_search_result, generate_cache_key
+from app.services.cache_service import (
+    get_cached_search, cache_search_result, generate_cache_key,
+    get_cached_expansion, cache_expansion,
+    get_cached_embeddings, cache_embeddings,
+)
 from app.services.audit_service import log_action
 from app.services.storage_service import generate_presigned_url
 import json
@@ -334,7 +338,17 @@ async def _expand_trilingual_query(query: str, _attempts: int = 2) -> dict:
     it was hitting the static English/English fallback on the very first
     bad draw -- silently downgrading multilingual query understanding for
     the whole request on a single flaky sample. One retry gets a second,
-    independent sample from the model before giving up."""
+    independent sample from the model before giving up.
+
+    Cached in Redis: this round-trip measured ~1.2s, about 22% of an
+    uncached search, and the expansion depends only on the query text --
+    no tenant data, no filters -- so the second person to ask a given
+    question can skip it entirely. Only SUCCESSFUL expansions are cached;
+    see the fallback at the end of this function for why."""
+    cached = await get_cached_expansion(query)
+    if cached:
+        return cached
+
     llm = get_llm_provider()
     sys_msg = (
         "You are a multilingual AI query normalization assistant for enterprise document search in India.\n"
@@ -364,13 +378,15 @@ async def _expand_trilingual_query(query: str, _attempts: int = 2) -> dict:
             data = json.loads(clean_json)
             logger.info("Tri-lingual query expansion for '%s': %s", query, data)
             detected_lang = data.get("detected_lang", "English")
-            return {
+            expansion = {
                 "detected_lang": detected_lang,
                 "response_lang": data.get("response_lang") or detected_lang,
                 "english": data.get("english", query),
                 "hindi": data.get("hindi", query),
                 "marathi": data.get("marathi", query),
             }
+            await cache_expansion(query, expansion)
+            return expansion
         except Exception as e:
             last_error = e
             logger.warning("Tri-lingual query expansion attempt %d/%d failed: %s", attempt + 1, _attempts, e)
@@ -384,6 +400,12 @@ async def _expand_trilingual_query(query: str, _attempts: int = 2) -> dict:
                 # to actually clear before the next attempt.
                 await asyncio.sleep(1.5)
 
+    # Deliberately NOT cached. This is the call-failed fallback (query
+    # unchanged in all three languages); caching it would pin a degraded
+    # monolingual expansion for 24h on the strength of one bad LLM call,
+    # and every later search for that query would silently lose
+    # cross-script matching -- which on this Marathi corpus is what finds
+    # results at all (see _pick_secondary_rerank_probe).
     logger.warning("Tri-lingual query expansion failed after %d attempt(s): %s", _attempts, last_error)
     return {"detected_lang": "English", "response_lang": "English", "english": query, "hindi": query, "marathi": query}
 
@@ -556,8 +578,22 @@ async def search(
 
     embed_provider = get_embed_provider()
     tri_queries = list(dict.fromkeys([q_en, q_hi, q_mr, query, *glossary_terms]))
-    q_embeddings = await embed_provider.embed(tri_queries)
-    _mark(f"embed(x{len(tri_queries)})")
+
+    # Embed only the variants not already cached. Same reasoning as the
+    # expansion cache: a vector is a pure function of its text, so it is
+    # reusable across tenants and filters. Order matters to every caller
+    # below (q_embeddings is indexed positionally against tri_queries), so
+    # the cached and freshly-embedded vectors are recombined in the
+    # original variant order rather than appended.
+    cached_vectors = await get_cached_embeddings(tri_queries)
+    to_embed = [t for t in tri_queries if t not in cached_vectors]
+    if to_embed:
+        fresh = await embed_provider.embed(to_embed)
+        newly = dict(zip(to_embed, fresh))
+        await cache_embeddings(newly)
+        cached_vectors.update(newly)
+    q_embeddings = [cached_vectors[t] for t in tri_queries]
+    _mark(f"embed(x{len(tri_queries)},miss={len(to_embed)})")
 
     # Build filter clauses dynamically for hybrid search
     filter_clauses = []
@@ -1131,6 +1167,8 @@ async def search(
         )
         return resp
         
+    _mark("rerank")
+
     final_results = []
     excerpts = []
     doc_ids_for_metadata = []
@@ -1284,6 +1322,8 @@ async def search(
     # combined list, so it overlaps the LLM round-trip instead of preceding it.
     already_found = {r.document_id for r in final_results}
     pending_title_task = asyncio.create_task(_find_pending_title_matches(db, tenant_id, query, exclude_doc_ids=already_found))
+
+    _mark("assemble-results")
 
     # 7. Generate the AI answer — T70: every claim bound to a source excerpt,
     # refuse outright rather than guess when the excerpts don't answer it.

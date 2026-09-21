@@ -87,3 +87,91 @@ async def invalidate_tenant_cache(tenant_id: str) -> None:
                     await r.delete(*keys)
     except Exception as e:
         logger.warning(f"Tenant cache invalidation notice for {tenant_id}: {e}")
+
+
+# --- Query-expansion cache --------------------------------------------------
+# The trilingual expansion is an LLM round-trip that costs ~1.2s, which is
+# ~22% of an uncached search. Unlike the search cache above it is NOT
+# tenant-scoped, because the expansion is a pure text transformation of the
+# query itself — it reads no tenant data and produces the same English/Hindi/
+# Marathi forms whoever asks. Caching it globally means the second person to
+# ask a given question skips the round-trip even though their results, their
+# filters and their tenant all differ.
+#
+# TTL is long (24h) because the mapping only changes if the prompt or the
+# model changes, neither of which happens between deploys.
+_EXPANSION_TTL_SECONDS = 86400
+
+
+def generate_expansion_cache_key(query: str) -> str:
+    return f"qexpand:{hashlib.sha256(query.strip().lower().encode()).hexdigest()}"
+
+
+async def get_cached_expansion(query: str) -> Optional[dict]:
+    try:
+        async with get_redis() as r:
+            data = await r.get(generate_expansion_cache_key(query))
+            if data:
+                return json.loads(data)
+    except Exception as e:
+        logger.warning(f"Failed to fetch cached query expansion: {e}")
+    return None
+
+
+async def cache_expansion(query: str, expansion: dict) -> None:
+    try:
+        async with get_redis() as r:
+            await r.set(
+                generate_expansion_cache_key(query),
+                json.dumps(expansion),
+                ex=_EXPANSION_TTL_SECONDS,
+            )
+    except Exception as e:
+        logger.warning(f"Failed to cache query expansion: {e}")
+
+
+# --- Query-embedding cache --------------------------------------------------
+# Embedding the query variants measured ~850ms per search (7 variants through
+# BGE-M3 on CPU). Like the expansion above this is a pure function of the text
+# — same string in, same vector out, no tenant data involved — so it is cached
+# globally and keyed on the text alone.
+#
+# This is local inference, not a metered API, so the win here is latency and
+# CPU rather than quota. Vectors are ~1024 floats; they are stored per variant
+# so overlapping variant sets between different queries still hit.
+_EMBEDDING_TTL_SECONDS = 86400
+
+
+async def get_cached_embeddings(texts: list[str]) -> dict[str, list[float]]:
+    """Return the subset of `texts` that are already embedded."""
+    if not texts:
+        return {}
+    try:
+        async with get_redis() as r:
+            keys = [f"qembed:{hashlib.sha256(t.encode()).hexdigest()}" for t in texts]
+            values = await r.mget(keys)
+            return {
+                t: json.loads(v)
+                for t, v in zip(texts, values)
+                if v
+            }
+    except Exception as e:
+        logger.warning(f"Failed to fetch cached query embeddings: {e}")
+        return {}
+
+
+async def cache_embeddings(text_to_vector: dict[str, list[float]]) -> None:
+    if not text_to_vector:
+        return
+    try:
+        async with get_redis() as r:
+            pipe = r.pipeline()
+            for t, vec in text_to_vector.items():
+                pipe.set(
+                    f"qembed:{hashlib.sha256(t.encode()).hexdigest()}",
+                    json.dumps(vec),
+                    ex=_EMBEDDING_TTL_SECONDS,
+                )
+            await pipe.execute()
+    except Exception as e:
+        logger.warning(f"Failed to cache query embeddings: {e}")

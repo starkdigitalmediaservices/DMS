@@ -7,6 +7,7 @@ import uuid
 from uuid import UUID
 
 from celery import Celery
+from celery.signals import worker_ready
 from sqlalchemy import select, delete, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
@@ -34,6 +35,29 @@ celery_app = Celery(
 )
 
 logger = logging.getLogger(__name__)
+
+
+@worker_ready.connect
+def _warm_embedding_model_on_worker_start(**_kwargs):
+    """Load BGE-M3 once the worker is up, before any real task needs it.
+
+    Same cold start the API pays (measured: first embed 17.35s, every
+    later one 0.22s), except here it lands on whichever document happens
+    to be ingested first after a deploy — that upload just sits in
+    'pending' for an extra ~17s for no reason the user can see.
+    get_embed_provider() caches a module-level singleton, so one throwaway
+    embed here means the first real ingest finds the model already
+    resident. Best-effort: a failure here must not stop the worker
+    accepting tasks, it only means the first task pays the load as before.
+    """
+    import time
+
+    try:
+        started = time.time()
+        asyncio.run(get_embed_provider().embed(["warmup"]))
+        logger.info("Worker embedding model warm after %.1fs", time.time() - started)
+    except Exception as e:
+        logger.warning("Worker embedding warmup failed (first task will pay the load): %s", e)
 
 
 def _new_task_db_session_factory():

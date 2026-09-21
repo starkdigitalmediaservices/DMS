@@ -180,6 +180,16 @@ async def upload_documents_bulk(
 
 from ..models.metadata_item import MetadataItem
 
+# Hard ceiling on one page of documents. This endpoint had no limit at all:
+# it returned every matching row for the tenant in a single response, so a
+# large drive meant an unbounded query, an unbounded payload, and a presigned
+# URL minted per row. Kept generous rather than a small page size so existing
+# callers (the web UI fetches a folder's contents in one go) are unaffected at
+# realistic drive sizes, while the unbounded case is gone. Callers that need
+# more page explicitly via limit/offset and read X-Total-Count.
+MAX_DOCUMENT_PAGE_SIZE = 500
+
+
 async def list_documents(
     db: AsyncSession,
     tenant_id: UUID,
@@ -187,26 +197,47 @@ async def list_documents(
     include_all: bool = False,
     is_starred: Optional[bool] = None,
     is_trashed: bool = False,
-) -> List[DocumentListItem]:
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> tuple[List[DocumentListItem], int]:
+    """Returns (items, total_matching) — total is the unpaginated count, so a
+    caller can tell from X-Total-Count whether it's seeing everything."""
+    base_filters = [Document.tenant_id == tenant_id, Document.is_trashed == is_trashed]
+
+    if is_starred is not None:
+        base_filters.append(Document.is_starred == is_starred)
+    elif not include_all and folder_id is not None:
+        base_filters.append(Document.folder_id == folder_id)
+    elif not include_all and folder_id is None and is_starred is None and not is_trashed:
+        base_filters.append(Document.folder_id.is_(None))
+
+    total = await db.scalar(
+        select(func.count()).select_from(Document).where(*base_filters)
+    ) or 0
+
+    effective_limit = MAX_DOCUMENT_PAGE_SIZE if limit is None else max(1, min(limit, MAX_DOCUMENT_PAGE_SIZE))
+    effective_offset = max(0, offset)
+
     stmt = (
         select(Document)
-        .where(Document.tenant_id == tenant_id, Document.is_trashed == is_trashed)
+        .where(*base_filters)
         .options(
             selectinload(Document.versions),
             selectinload(Document.metadata_items.and_(MetadataItem.key.in_(["quality_flag", "quality_report"]))),
         )
+        .order_by(Document.created_at.desc())
+        .offset(effective_offset)
+        .limit(effective_limit)
     )
-
-    if is_starred is not None:
-        stmt = stmt.where(Document.is_starred == is_starred)
-    elif not include_all and folder_id is not None:
-        stmt = stmt.where(Document.folder_id == folder_id)
-    elif not include_all and folder_id is None and is_starred is None and not is_trashed:
-        stmt = stmt.where(Document.folder_id.is_(None))
-
-    stmt = stmt.order_by(Document.created_at.desc())
     res = await db.execute(stmt)
     docs = res.scalars().all()
+
+    if total > effective_offset + len(docs):
+        logger.info(
+            "list_documents: returning %d of %d matching documents (offset=%d, limit=%d) — "
+            "caller should paginate via offset/limit; full count is in X-Total-Count",
+            len(docs), total, effective_offset, effective_limit,
+        )
 
     items = []
     for doc in docs:
@@ -245,7 +276,7 @@ async def list_documents(
                 quality_warnings=q_warnings,
             )
         )
-    return items
+    return items, total
 
 
 async def get_document(

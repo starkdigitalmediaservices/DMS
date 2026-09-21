@@ -18,6 +18,25 @@ from .api_logging_middleware import ApiLoggingMiddleware
 from .limiter import limiter
 import asyncio
 
+# Nothing in this app ever configured logging, so the root logger sat at
+# its WARNING default and every logger.info() in the codebase was silently
+# discarded in the running service — connector "ingested X" lines, search
+# phase timings, ingestion progress, all of it. Only warnings and errors
+# ever reached the container logs, which meant the instrumentation that
+# already existed was unusable for diagnosing anything in production.
+# Configured once here, at import time, before the app starts.
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+# SQLAlchemy's engine logger is separately very chatty (it echoes every
+# statement and every bound parameter list, which is what buried the
+# useful lines in these logs); keep it at WARNING unless explicitly asked.
+logging.getLogger("sqlalchemy.engine").setLevel(
+    getattr(logging, settings.sql_log_level.upper(), logging.WARNING)
+)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_redis()
@@ -34,10 +53,34 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(f"T64 WORM archive bucket setup failed at startup: {e}")
+    # Warm the local embedding model before serving traffic. BGE-M3 loads
+    # lazily on first use and that load is ~17s on CPU (measured: first
+    # embed 17.35s, every subsequent one 0.22s), which the first real
+    # search or upload after every deploy/restart was paying in full.
+    # get_embed_provider() caches a module-level singleton, so doing one
+    # throwaway embed here moves that cost into startup where nobody is
+    # waiting on it. Run in a thread so the model load doesn't block the
+    # event loop, and best-effort so a warmup hiccup can't stop the app
+    # from booting — the first request would just pay the load as before.
+    async def _warm_embedding_model():
+        import logging
+        import time
+        log = logging.getLogger(__name__)
+        try:
+            from .ai.factory import get_embed_provider
+            started = time.time()
+            await get_embed_provider().embed(["warmup"])
+            log.info("Embedding model warm after %.1fs", time.time() - started)
+        except Exception as e:
+            log.warning("Embedding warmup failed (first request will pay the load): %s", e)
+
+    warmup_task = asyncio.create_task(_warm_embedding_model())
+
     # T40 — connectors are a typed contract (services/connector_base.py);
     # a new connector is added to get_enabled_connectors(), never here.
     connector_tasks = [asyncio.create_task(c.run_loop()) for c in get_enabled_connectors()]
     yield
+    warmup_task.cancel()
     for task in connector_tasks:
         task.cancel()
 

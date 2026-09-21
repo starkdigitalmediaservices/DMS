@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, UploadFile, File, Query, status
+from fastapi import APIRouter, Depends, UploadFile, File, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from ...schemas.document import (
     DocumentUploadResponse,
@@ -100,22 +100,36 @@ async def dismiss_document_classification_api(
 
 @router.get('', response_model=List[DocumentListItem])
 async def list_documents_api(
+    response: Response,
     folder_id: Optional[uuid.UUID] = Query(None),
     include_all: bool = Query(False),
     is_starred: Optional[bool] = Query(None),
     is_trashed: bool = Query(False),
+    limit: Optional[int] = Query(
+        None, ge=1,
+        description=f"Page size. Capped at {document_service.MAX_DOCUMENT_PAGE_SIZE}; "
+                    "omitted means that cap, not unlimited.",
+    ),
+    offset: int = Query(0, ge=0, description="Rows to skip, for paging."),
     current_user: TokenPayload = Depends(require_tenant_access),
     db: AsyncSession = Depends(get_tenant_db),
 ):
+    """Returns a page of documents. The body stays a bare array (existing
+    clients depend on that shape); the unpaginated total comes back in the
+    X-Total-Count header, which is how a caller tells there's more to fetch."""
     tenant_id = uuid.UUID(current_user.tenant_id)
-    return await document_service.list_documents(
+    items, total = await document_service.list_documents(
         db=db,
         tenant_id=tenant_id,
         folder_id=folder_id,
         include_all=include_all,
         is_starred=is_starred,
         is_trashed=is_trashed,
+        limit=limit,
+        offset=offset,
     )
+    response.headers["X-Total-Count"] = str(total)
+    return items
 
 
 @router.get('/{document_id}', response_model=DocumentDetailResponse)

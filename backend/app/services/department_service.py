@@ -2,7 +2,7 @@ from typing import Optional, Set
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.department import Department, DepartmentMember, DepartmentFolder
@@ -74,6 +74,48 @@ async def grant_department_folder(db: AsyncSession, tenant_id: UUID, department_
 
     await log_action(db, actor_id, tenant_id, "department.grant_folder", resource_type="department", resource_id=department_id, details={"folder_id": str(folder_id)})
     return grant
+
+
+async def delete_department(db: AsyncSession, tenant_id: UUID, department_id: UUID, actor_id: UUID) -> None:
+    """Delete a department along with its memberships and folder grants.
+
+    The child rows are removed explicitly because neither FK declares a
+    cascade — without this the delete just fails on a referencing row.
+
+    Worth being deliberate about: a department is an access-control
+    boundary (see user_has_folder_scope), so removing one REVOKES folder
+    scope for every department-scoped member that was relying on it. That
+    is the intended effect, not a side effect, which is why the audit
+    entry records how much was revoked rather than just the name.
+    """
+    if actor_id is None:
+        raise ValueError("deleting a department requires an actor")
+
+    dept = await db.get(Department, department_id)
+    if not dept or dept.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Department not found")
+
+    member_ids = (await db.execute(
+        select(DepartmentMember.id).where(DepartmentMember.department_id == department_id)
+    )).scalars().all()
+    folder_ids = (await db.execute(
+        select(DepartmentFolder.folder_id).where(DepartmentFolder.department_id == department_id)
+    )).scalars().all()
+
+    await db.execute(delete(DepartmentFolder).where(DepartmentFolder.department_id == department_id))
+    await db.execute(delete(DepartmentMember).where(DepartmentMember.department_id == department_id))
+    await db.delete(dept)
+    await db.flush()
+
+    await log_action(
+        db, actor_id, tenant_id, "department.delete",
+        resource_type="department", resource_id=department_id,
+        details={
+            "name": dept.name,
+            "members_removed": len(member_ids),
+            "folder_grants_revoked": len(folder_ids),
+        },
+    )
 
 
 async def list_user_department_folder_ids(db: AsyncSession, tenant_id: UUID, user_id: UUID) -> Set[UUID]:

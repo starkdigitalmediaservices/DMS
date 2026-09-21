@@ -34,6 +34,20 @@ async def create_department_api(
     return {"id": str(dept.id), "name": dept.name}
 
 
+@router.delete("/{department_id}", status_code=204)
+async def delete_department_api(
+    department_id: uuid.UUID,
+    current_user: TokenPayload = Depends(require_role("it_admin")),
+    db: AsyncSession = Depends(get_tenant_db),
+):
+    """Delete a department, its memberships and its folder grants. This
+    revokes folder scope for any department-scoped member who had access
+    only through this department."""
+    tenant_id = uuid.UUID(current_user.tenant_id)
+    actor_id = uuid.UUID(current_user.sub)
+    await department_service.delete_department(db, tenant_id, department_id, actor_id)
+
+
 @router.post("/{department_id}/members")
 async def add_department_member_api(
     department_id: uuid.UUID,

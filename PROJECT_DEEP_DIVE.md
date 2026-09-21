@@ -5,14 +5,16 @@
 **Internal name:** Document Management System (DMS)
 **Domain:** Government land & property records
 **Languages:** English + Marathi
-**Status:** All engineering complete; remaining items are external sign-offs, not code. One live provider (AI field-extraction) is paused for a credit top-up — see §7's demo note before you pick which document to show.
+**Status:** All engineering complete; remaining items are external sign-offs, a hardware decision, and two paid API tiers — not code. One live provider (AI field-extraction) is paused for a credit top-up — see §8's demo note before you pick which document to show.
 
 **At a glance:**
 - **6** user roles (RBAC)
 - **4** layers in the search engine
-- **76+** backend functions live-tested across two independent hardening passes
+- **76+** backend functions live-tested across three independent hardening passes
 - **9** table-reading features (TS1–TS9) built against a real 1973 register
 - **2** scripts read: English & Devanagari
+- **391** automated backend tests, green
+- **Backup & disaster recovery**, with a restore rehearsed end-to-end
 - **0** unfinished engineering work
 
 ---
@@ -25,10 +27,11 @@
 4. [The Tech Stack](#4-the-tech-stack)
 5. [Why These Choices](#5-why-these-choices)
 6. [Security, Access & Trust](#6-security-access--trust)
-7. [What's Done, What's Still Open](#7-whats-done-whats-still-open)
-8. [Proven by Testing, Not Just Claimed](#8-proven-by-testing-not-just-claimed)
-9. [Demo Cheat Sheet](#9-demo-cheat-sheet)
-10. [Glossary](#10-glossary)
+7. [Keeping It Running: Backup, Recovery & Scheduled Work](#7-keeping-it-running-backup-recovery--scheduled-work)
+8. [What's Done, What's Still Open](#8-whats-done-whats-still-open)
+9. [Proven by Testing, Not Just Claimed](#9-proven-by-testing-not-just-claimed)
+10. [Demo Cheat Sheet](#10-demo-cheat-sheet)
+11. [Glossary](#11-glossary)
 
 ---
 
@@ -157,6 +160,7 @@ Every major piece of technology used, organized by the job it does — not just 
 |---|---|
 | **PostgreSQL 16 + pgvector** | One database doing two jobs: normal relational data (users, documents, folders, audit log) *and* AI vector search — see §5 for why that matters. |
 | **Celery + Redis** | Runs slow work (OCR, AI extraction, embedding) in the background so the user's screen is never frozen waiting; Redis is both the job queue and a fast answer cache. |
+| **Celery Beat** | The *scheduler* that fires recurring jobs — today, the daily purge of items sitting in the recycle bin past their retention period. Worth calling out as a separate piece: a Celery worker only ever runs work that something else puts on the queue, so without Beat a "daily" task is defined but never actually happens. It runs as its own single-replica service for exactly one reason: two schedulers would fire every scheduled job twice. |
 | **Flower** | A live dashboard showing every background job in flight — useful for the demo to prove processing is really happening, not staged. |
 | **MinIO / AWS S3** | Stores the actual scanned files and images — large binary files don't belong inside a database. MinIO is the local stand-in; AWS S3 is the production equivalent, same interface. |
 
@@ -174,7 +178,10 @@ Every major piece of technology used, organized by the job it does — not just 
 
 | Technology | What it's for |
 |---|---|
-| **Docker Compose** | Every piece — database, cache, backend, worker, frontend — runs the exact same way on any machine: one command starts the whole stack, which is also what makes the demo possible. |
+| **Docker Compose** | Every piece — database, cache, backend, worker, scheduler, frontend — runs the exact same way on any machine: one command starts the whole stack, which is also what makes the demo possible. |
+| **Helm chart (Kubernetes)** | The production deployment path, for customers running this on a cluster rather than a single machine. The chart refuses to render at all if the shared connector identity hasn't been configured, so a broken ingestion setup fails at deploy time rather than silently at runtime. |
+| **Server-Sent Events (SSE)** | How search results reach the browser *before* the AI answer is ready. The documents and the written answer arrive as two separate deliveries on one connection, so the user reads their results while the answer is still being composed — see §5. |
+| **Structured application logging** | Every component logs at a configurable level, with database-statement noise separated from application messages. Search additionally records a per-phase timing breakdown, so "search felt slow" can be answered with evidence rather than a guess. |
 
 ---
 
@@ -197,6 +204,15 @@ Three real reasons: cost control (prices and quotas change), resilience (a provi
 **Why design for "air-gapped" (fully offline) from day one?**
 This product is intended to eventually run inside government facilities that may have no internet access at all. Rather than bolt that on later, the architecture already has a hard on/off switch: when air-gapped mode is enabled, any attempt to call an external AI service **fails loudly and closed** rather than silently leaking data out — described further in §6.
 
+**Why results and the AI answer arrive separately, instead of all at once?**
+A search does two different-sized jobs: finding the right documents (fast) and composing a written, cited answer about them (an extra AI round-trip, several seconds). Delivering them together means the user stares at a spinner for the length of the *slower* one. So the documents are sent the moment they exist and the answer follows on the same connection. Measured on this system: results at ~3 seconds, answer at ~4.4 seconds — and when the answer provider is throttled, that second number has been measured at 17 and even 56 seconds, while the documents still appeared in about two. The gap is biggest exactly when it matters most.
+
+**Why the AI answer is *not* streamed word-by-word, the way a chatbot does?**
+This is a deliberate refusal, and it's a good illustration of the product's priorities. The answer isn't free-form prose — the system asks the model for a set of discrete *claims*, then checks each one before showing it: every number in a claim must actually appear in the excerpt that claim cites. Claims that fail are silently dropped, and if none survive, the whole answer becomes an honest refusal. Streaming raw words would mean showing text the verifier is about to reject — i.e. briefly showing the user an unverified claim and then taking it back. That trades the grounding guarantee for the *appearance* of speed. Streaming per *verified claim* would be compatible with the design and is the logical next step; it simply needs a capability the AI providers aren't wired for yet.
+
+**Why the second re-ranking pass costs twice the API calls, and why that stays.**
+Re-ranking runs twice per search: once with the user's query, once with its cross-script counterpart (English ⇄ Marathi). That doubles the cost of the most rate-limited external call in the system, so it was explicitly tested for removal — and the test said keep it. On this Marathi corpus, four out of five plain-English test queries returned **zero results** with the single-probe version, versus real matches with both. The documents are in Marathi; an English-only relevance probe scores them near zero. Halving the API calls would have halved the latency and destroyed the search.
+
 **Why Next.js / React for the frontend?**
 It's the most widely adopted, well-supported way to build a fast, modern, type-safe web interface, with a large ecosystem for the specific things this product needs (in-browser document rendering, real-time updates) and a straightforward path to production deployment.
 
@@ -218,11 +234,67 @@ Nothing the AI produces is presented as fact until a person confirms it — this
 **Tamper-evident audit trail.**
 Every mutating action is written to an append-only, hash-chained log — each entry cryptographically includes the previous one, so any attempt to quietly edit history breaks the chain and is detectable on demand.
 
-> **Found & fixed, not just designed:** A real cross-tenant data-isolation gap was found during hardening testing and fixed before this stage — see §8 for exactly what happened and why it matters that it was caught. Isolation has since been re-verified a second way: a genuine second tenant was created and used to attempt reading the first tenant's real documents, search results, and entity records directly — every attempt correctly came back empty, not just structurally rejected. That's a positive proof, not only a negative one.
+**The system refuses to start insecurely in production.**
+Security controls that depend on someone remembering to set a value are not controls. Five settings are now validated at startup, and in production the application *refuses to boot* rather than run degraded:
+
+| If this is wrong… | …what would silently happen | Now |
+|---|---|---|
+| The restricted database role isn't configured | Every request connects as the database superuser, which **bypasses Row-Level Security entirely** — tenant isolation would be off, with only a log line to say so | Refuses to start |
+| The inbound-email secret is still the shipped default | That secret is the *only* authentication on the endpoint that ingests documents from email — anyone who had read the source could post documents into the tenant | Refuses to start |
+| Browser origins are left wide open (`*`) | Any website could drive the API using a logged-in user's session | Refuses to start |
+| The login-token signing key is weak or short | Login tokens become forgeable | Refuses to start |
+| The scanner endpoint's secret is still the default | Anyone could submit scans as any tenant | Refuses to start |
+
+The failure is loud and names the exact variable. This is the opposite of the usual pattern, where the insecure configuration is the one that quietly works.
+
+**Shared credentials are no longer readable by every user.**
+The connector-information screen used to return the SFTP password in plain text to *any* signed-in user of *any* role — a shared service credential that grants write access to the folder every tenant's ingestion pipeline reads from. A read-only user in one organisation could read it straight out of the API and drop files that arrive as ingested documents. It's now returned only to an IT Admin; everyone else sees the connection details they need and is told who to ask.
+
+**The evidence archive is genuinely immutable, and that was tested, not assumed.**
+Documents archived for evidentiary retention go into a separate store with S3 Object Lock in COMPLIANCE mode. This was verified by attempting the attack rather than trusting the setting: writing a locked object and then trying to permanently destroy it returns *"Object is WORM"* and fails. A normal delete leaves the locked version intact behind a delete marker; an overwrite creates a new version rather than replacing the protected one. Worth knowing for anyone auditing this: the usual command-line check for this (`mc retention info`) reports something *different* — the bucket's optional default retention rule — and reads as "not enabled" even when Object Lock is on. Retention here is set per document from its own retention class, which is why no blanket bucket-wide rule exists.
+
+> **Found & fixed, not just designed:** A real cross-tenant data-isolation gap was found during hardening testing and fixed before this stage — see §9 for exactly what happened and why it matters that it was caught. Isolation has since been re-verified a second way: a genuine second tenant was created and used to attempt reading the first tenant's real documents, search results, and entity records directly — every attempt correctly came back empty, not just structurally rejected. That's a positive proof, not only a negative one.
 
 ---
 
-## 7. What's Done, What's Still Open
+## 7. Keeping It Running: Backup, Recovery & Scheduled Work
+
+A system holding statutory records has to answer two operational questions that have nothing to do with features: *what happens when the machine dies*, and *what happens to work nobody is watching*.
+
+### Backup and disaster recovery
+
+Three scripts (`scripts/dr/`) plus a runbook (`docs/DISASTER_RECOVERY.md`). What they protect:
+
+| Component | What's in it | Size here |
+|---|---|---|
+| PostgreSQL | documents, text chunks and their AI embeddings, extracted facts, the entity graph, the audit log, users and permissions | 95 MB |
+| Database roles | the restricted, non-superuser login the application connects as | tiny — and critical, see below |
+| Object storage | the actual scanned files and their archival PDF/A renditions | 283 MB / 1,197 objects |
+| Evidence archive | the write-once retention store | 1.7 MB |
+
+**Measured: backup 5m20s, restore 5m30s.** Recovery time is therefore about six minutes of mechanical work; how much data you could lose is simply your backup interval — nightly means up to a day.
+
+Two details decide whether a restore actually produces a working system, and both were genuinely surprising:
+
+**1. The database is backed up *before* the files, and that order is not arbitrary.** When a document is uploaded, the file is written to storage *first* and the database row is committed *after*. That single fact determines the safe order. Back up the database first and every row it contains is guaranteed to have had its file written earlier — so a file snapshot taken afterwards necessarily includes it. Do it the other way round and any document uploaded between the two snapshots ends up with its row inside the backup but its file outside: a document that exists, appears in the drive, and returns "not found" when opened. Silent data loss. The safe order costs a few orphaned files instead, which are invisible and harmless.
+
+**2. Database roles are not inside a database backup.** They live at the cluster level, so a standard database dump silently excludes them. This system depends on a restricted role that *cannot* bypass Row-Level Security — that's precisely what makes tenant isolation real. Restore without it and you get one of two outcomes: the application can't connect at all, or somebody "fixes" it by pointing the app at the superuser — at which point every request bypasses tenant isolation and nothing says so. Roles are captured separately and restored first.
+
+**Verification is part of the process, not a separate chore.** Every backup and every restore automatically checks four things: the schema version matches, every table's row count matches what the backup recorded, the audit hash-chain is still intact end-to-end, and every document's stored file actually exists. That last check matters because the retention purge permanently deletes files — a purge running during the backup window could otherwise leave a reference to a file that's gone.
+
+**The restore was rehearsed, not assumed.** Restoring into a scratch database and separate storage, with live data untouched: every row count exact (1,282 tenants, 367 documents, 20,471 audit entries), audit chain intact across 1,228 tenants and 20,245 entries, all 240 document references resolving, all 1,231 embeddings present at full dimension, all 25 tenant-isolation policies restored, and the append-only audit protection still in place. A deliberate negative test confirmed the verifier actually fails when files really are missing — so a passing check means something.
+
+**Scheduled nightly, with the guards an unattended job needs.** A backup runs at 02:15 through a wrapper that handles the things that quietly break scheduled jobs: the scheduler's minimal environment often can't find Docker (the job then "runs" nightly and produces nothing); a lock prevents a manual run colliding with the scheduled one; and — because this machine's disk sits at 89% full — it refuses to start below a free-space floor rather than filling the disk and taking the database down with it. A backup that fails its own verification is *kept* and renamed rather than deleted, because the evidence is worth more than the disk space.
+
+> **The honest gap:** the backups currently sit on the same physical disk as the data they protect, because this machine has only one. That is a copy, not a backup — a single disk failure loses both. The job is one configuration line away from writing elsewhere, and includes a guard that refuses to run if the intended volume isn't actually mounted (an unmounted external drive otherwise looks like an ordinary empty folder, and the backup quietly fills the disk it was supposed to be moved off). Point-in-time recovery — rewinding to an arbitrary moment rather than to a nightly snapshot — is also not configured.
+
+### Scheduled work
+
+The recycle bin has a retention policy: items sit there for a set period, then are permanently purged. That schedule was *defined* but had never once actually run, because nothing was starting the scheduler process — a worker only executes what something else queues. That's now a running service, verified end-to-end by watching a job fire, reach the queue, and be executed. It exists in both the single-machine and Kubernetes deployments.
+
+---
+
+## 8. What's Done, What's Still Open
 
 Every substantial piece of engineering scoped for this build is complete. What remains is a short list of items that need a decision or an external party — not more code.
 
@@ -230,24 +302,28 @@ Every substantial piece of engineering scoped for this build is complete. What r
 
 | Area | Status | Notes |
 |---|---|---|
-| Reading & extraction | 🟡 Mostly built | OCR, VLM field extraction, classification, ditto marks, continuation-row merge, and handwriting handling are all confirmed working against real registers. One piece — left/right spread-join across facing pages — is fully coded, correctly refuses to guess on a mismatch, and its positive (successful-join) case is now confirmed end-to-end on a purpose-built dummy document; not yet observed on a real register, see §8. A real document-classification bug (a scanned register silently matched to the wrong registered form template, from a different district and year) was found and fixed this pass — see §8. |
+| Reading & extraction | 🟡 Mostly built | OCR, VLM field extraction, classification, ditto marks, continuation-row merge, and handwriting handling are all confirmed working against real registers. One piece — left/right spread-join across facing pages — is fully coded, correctly refuses to guess on a mismatch, and its positive (successful-join) case is now confirmed end-to-end on a purpose-built dummy document; not yet observed on a real register, see §9. A real document-classification bug (a scanned register silently matched to the wrong registered form template, from a different district and year) was found and fixed this pass — see §9. |
 | Human verification workbench | ✅ Built | Queues, confidence scores, calibration gate, bulk actions with undo, click-through to the exact source rectangle. A navigation gap — the workbench page itself was fully built but had no link anywhere in the app to reach it — was found and fixed this pass; it's reachable from the main sidebar now. |
-| Search & Q&A | ✅ Built | Hybrid search, bilingual, cited/grounded AI answers. Near-duplicate detection now runs at search time, not just at upload: when the corpus holds two rescans of the same underlying document, search and chat collapse them to a single citation instead of confusingly citing whichever copy happened to score higher — confirmed live against a real duplicate pair already in the system. |
+| Search & Q&A | ✅ Built | Hybrid search, bilingual, cited/grounded AI answers. Near-duplicate detection now runs at search time, not just at upload: when the corpus holds two rescans of the same underlying document, search and chat collapse them to a single citation instead of confusingly citing whichever copy happened to score higher — confirmed live against a real duplicate pair already in the system. Results now reach the screen before the written answer (§5), and the two slowest repeated steps are cached, cutting fixed pipeline work from ~2.8s to ~0.4s. Remaining search time is almost entirely waiting on two external AI services whose free tiers throttle — a paid-tier decision, not engineering (§9). |
 | Entity graph & legal records | ✅ Built | Tiered-trust linking, full amendment history, legal status tracking. A real API gap — no way to delete a mistaken entity or link once created — was found and fixed this pass, live-verified end to end (create, link, view, delete). |
-| Governance & audit | 🟡 Mostly built | Tamper-evident log, exports, completeness dashboard all live. The formal legal certificate is intentionally marked draft, pending legal counsel's sign-off on its wording — not an engineering gap. The health-check endpoint now actually verifies tenant isolation is enforceable, not just reporting database/cache status. |
+| Governance & audit | 🟡 Mostly built | Tamper-evident log, exports, completeness dashboard all live. The formal legal certificate is intentionally marked draft, pending legal counsel's sign-off on its wording — not an engineering gap. The health-check endpoint now actually verifies tenant isolation is enforceable, not just reporting database/cache status. The write-once evidence archive's immutability has now been proven by attempting to destroy a locked record and being refused (§6). |
+| Backup & disaster recovery | ✅ Built | Full backup of database, roles and files with automatic integrity verification; restore rehearsed end-to-end with live data untouched; scheduled nightly with disk, overlap and environment guards. One real gap stated plainly: backups currently share a disk with the data, because this machine has one — see §7. |
+| Operations & observability | ✅ Built | Scheduled jobs actually run (they previously never did). Application logging was entirely unconfigured — every informational log line in the codebase was being silently discarded — and is now configurable, with a per-phase search timing breakdown. The AI model is pre-loaded at startup, so the first search after a deploy no longer pays a ~17-second model load. |
 | Access control & language | ✅ Built | Six-role RBAC, department scoping, full Marathi translation alongside English. |
-| Ingestion connectors | 🟡 Mostly built | Upload, watched folders, SFTP, and email-in all work today. Google Drive / SharePoint / a government e-Office connector are ready to build but are waiting on those third parties to grant API access. |
+| Ingestion connectors | 🟡 Mostly built | Upload, watched folders, SFTP, email-in and scanner intake all work today — and all of them are *newly* working: every one was silently non-functional until this pass, see §9. Each is now proven end-to-end by dropping a real file and watching it index. Google Drive / SharePoint / a government e-Office connector are ready to build but are waiting on those third parties to grant API access. One design limit worth stating: every connector files documents under a single shared identity rather than routing to the tenant the file was meant for — deliberate scope, not an oversight. |
 | Fully offline ("air-gapped") mode | 🟡 Mostly built | OCR, embeddings, and re-ranking already run 100% locally. The one remaining external call is the AI vision-extraction step — a local replacement model has been evaluated and the hardware requirement is now known; it's a hardware purchase decision, not unsolved engineering. |
 | Formal accuracy benchmark | ⛔ Blocked | Needs a real reference set of documents with independently verified-correct answers to score against — that reference set doesn't exist yet. |
 | Business & legal sign-offs | ⛔ Blocked | Final licensing numbers and one open-source license question are drafted and ready, waiting on a business/legal decision-maker. |
 
 > **For whoever is running the demo:** the cloud vision-extraction provider (§4, "reading" step) is currently paused pending an API credit top-up — a cost-control choice, not a bug. Every already-processed document (the ones in the demo account today) is completely unaffected: its extracted facts, Workbench queue entries, search, and chat all work exactly as normal. The one thing to avoid live is uploading a **brand-new** document and expecting structured field extraction from it — it will index and become fully text-searchable, just without the field-by-field extraction step, until the provider is re-enabled. Pick an already-processed document (e.g. the Wardha register, with 1,358 extracted facts) for anything that needs to show extraction, the Workbench, or entity linking.
 
-**One line for the room, if asked directly:** there is no unstarted or unblocked engineering work left — everything outstanding is either a third party's access grant, a hardware budget decision, a human sign-off, or (for live extraction specifically, today) a credit top-up.
+**One line for the room, if asked directly:** there is no unstarted or unblocked engineering work left — everything outstanding is either a third party's access grant, a hardware budget decision, a human sign-off, a paid API tier, or (for live extraction specifically, today) a credit top-up.
+
+**If asked what would be worked on next, in order:** paid tiers for the two AI services that currently throttle search; moving backups onto separate storage; a GPU for fully-local extraction; and per-tenant routing for the ingestion connectors. All four are decisions with a known cost, not open engineering questions.
 
 ---
 
-## 8. Proven by Testing, Not Just Claimed
+## 9. Proven by Testing, Not Just Claimed
 
 Every feature in this document was tested live, against a real account with real data — not just reviewed on paper. That process found real bugs, which is exactly the point of doing it this way.
 
@@ -262,7 +338,7 @@ A second, independent security review specifically targeted cross-tenant data is
 **Table-stitching, checked directly against the live database (2026-09-02).** Rather than trust the automated test suite alone, every stitching handler was cross-checked against real documents already processed in the running system:
 - **Ditto-chain expansion:** 334 real "Do." marks correctly expanded to their real inherited value, across 124 real documents — including a real 68-page gazette register — plus 82 cases correctly flagged as unresolved rather than guessed.
 - **Continuation-row merge:** confirmed on two real 16-page registration files, with one field reconstructed from 17 separate regions spanning a real page boundary.
-- **Spread-join:** every real document that ever matched the spread-layout template has produced a correctly-flagged refusal ("no shared value between the two fragments") — the safe-refusal behavior is real and proven. On 2026-09-10 the positive case was proven too, on a purpose-built dummy document engineered with a genuine matching shared value across the spread: the two halves were correctly paired into one row. Still not yet demonstrated on real archival data — called out honestly in §7 rather than presented as fully proven end-to-end on real documents.
+- **Spread-join:** every real document that ever matched the spread-layout template has produced a correctly-flagged refusal ("no shared value between the two fragments") — the safe-refusal behavior is real and proven. On 2026-09-10 the positive case was proven too, on a purpose-built dummy document engineered with a genuine matching shared value across the spread: the two halves were correctly paired into one row. Still not yet demonstrated on real archival data — called out honestly in §8 rather than presented as fully proven end-to-end on real documents.
 
 **A second live hardening pass, against real production data (2026-09-09/10).** A separate, independent round of end-to-end testing — real API calls, real documents already in the account, a real second tenant created specifically to test isolation — found and fixed nine more issues:
 
@@ -278,11 +354,39 @@ A second, independent security review specifically targeted cross-tenant data is
 
 Every one of these was found by actually running the system — real logins, real searches, real documents, a real second tenant — not by reading the code and assuming it was correct. Full regression suite (380+ automated tests) stayed green throughout.
 
+**A third hardening pass, plus production-readiness (2026-09-21).** The widest pass yet: every API endpoint exercised, every ingestion path driven with real files, a second real tenant used to attack isolation, and the whole thing re-run through a browser. It found that several features believed complete had never actually worked.
+
+**The big one: every file-ingestion connector was silently dead.**
+SFTP, watched folders, email-in and scanner intake all attribute their documents to one shared identity — and that identity was a hard-coded email address belonging to no account in the database. Every connector failed on *every* poll cycle with "connector actor not found". The feature had been demonstrated by other means and nobody had watched a file actually land. Now configurable, pointed at a real account, and each path proven by dropping a real file and watching it index: SFTP through its own background loop, watched folders, email-in with a real MIME message and attachment, and scanner intake through the actual browser UI.
+
+**Four more that had never worked at all:**
+
+1. **Scanned uploads always failed with a server error.** The endpoint that receives scans ran without the database tenant context set, so the very first thing it tried — creating the "Scanned Documents" folder — was rejected by the tenant-isolation rules. Two separate bugs were stacked here: it also called the ingestion routine without passing who the document belonged to. In the browser this surfaced as *"Failed to ingest scan. Check connection and try again."* — which sent anyone hitting it to investigate their network, the one thing that wasn't wrong.
+2. **The scanner's folder watcher could never ingest a single file.** Same missing-arguments bug in a second place. It converted a multi-page TIFF to PDF correctly, then crashed on the final step, every time.
+3. **Scans could be filed under the wrong account, silently.** The scanner accepts a header naming which user a scan belongs to. That lookup ran without the narrow permission it needs, so it always found nobody and quietly fell back to the default identity — a caller saying "file this as Ayesha" got it filed as someone else, with no error. Proven fixed by filing a scan as a *different* tenant and confirming it landed there.
+4. **Creating a document template always failed.** The code claimed in a comment that templates had no tenant column; a migration had since added one, with isolation rules attached. Every creation attempt was rejected by the database. Nothing in the test suite covered it.
+
+**A folder watcher pointed at a folder that didn't exist.** The deployment file bound the user's own `Stark Drive` folder with a stray space before the colon, so the system created and watched a directory literally named `"Stark Drive "` — with a trailing space. Anything dropped into the real folder would never have been ingested. One character; found by listing the disk, not by reading the code.
+
+**Three production-security gaps that would only have surfaced in production:** the restricted database role being unset would have disabled tenant isolation with only a log line to say so; the inbound-email secret shipped as a public default while that endpoint was enabled by default; browser origins were unrestricted. All three now prevent startup (§6). Separately, the shared SFTP password was being handed to any signed-in user of any role.
+
+**Scheduled jobs had never run, and logs were being thrown away.** The daily retention purge was defined but no scheduler process existed to fire it. And nothing in the application had ever configured logging, so the default level silently discarded *every* informational message in the entire codebase — including the connector messages that would have revealed the failures above years earlier. Both fixed; the second is why the rest of this list was findable.
+
+**The test suite was quietly corrupting its own environment.** Each test created a throwaway organisation and never removed it: 6,434 accumulated, along with ~5,700 orphaned users and thousands of stray documents. Any question like "how many documents are indexed?" was meaningless. The suite now cleans up after itself, and the backlog was cleared — carefully, because ~1,264 of those organisations *cannot* be deleted: they're referenced by append-only audit entries, and the audit log correctly refuses to be edited. That's the tamper-evidence guarantee working as designed, so they were left in place rather than worked around.
+
+**Two optimisations were tested and rejected — which is the point of testing them.**
+- *Halving the search AI calls* by dropping the cross-script re-ranking probe: four of five plain-English queries returned **zero results** without it (§5). It would have looked like a 2× speedup and destroyed search.
+- *Running re-ranking locally* to remove an external dependency: the bundled local model ran over ten minutes on twenty real text chunks, at 194% CPU and 4.5 GB of memory, versus roughly half a second for the network call. Not viable on this hardware.
+
+**One of our own findings turned out to be wrong, and is corrected here.** An earlier report in this pass stated the evidence archive had no write-once protection enabled. It does. The check used reports a *different* setting — the bucket's optional default retention rule — and reads as "not enabled" even when Object Lock is on. Verified properly by trying to destroy a locked record and being refused (§6). Recording the correction rather than quietly deleting the claim is the same standard applied to everything else here.
+
+Full regression suite — **391 tests — green throughout.** Two tests that call a live AI service now *skip* with a stated reason when that service is rate-limited, instead of reporting a third party's quota as a code failure; a suite that goes red for someone else's billing teaches people to ignore red suites.
+
 > **Why this section exists:** the point of naming these bugs and gaps isn't to advertise flaws — it's that this is the standard of scrutiny this kind of system is held to before it touches a real legal record: find it yourself, report it honestly, and prove it can't silently happen again.
 
 ---
 
-## 9. Demo Cheat Sheet
+## 10. Demo Cheat Sheet
 
 Likely questions from the room, answered in one breath.
 
@@ -310,12 +414,24 @@ Be straight about this one rather than attempt it live: that specific case (a tw
 **"Can I upload a new document right now and see it fully processed?"**
 It'll index and become fully text-searchable immediately — but the field-by-field extraction step (Workbench entries, structured facts) is paused right now pending an AI-provider credit top-up, a cost-control choice, not a limitation. Every document already in the account was processed before that pause and is completely unaffected — use one of those (the Wardha register, with 1,358 extracted facts, is the best one to point at) for anything that needs to show extraction or the Workbench.
 
+**"What happens if this server dies tomorrow?"**
+There's a tested answer, not a hopeful one. A nightly backup covers the database, the files, and the database roles, and it verifies itself — row counts, the audit chain, and that every document's file really exists. Restoring takes about five and a half minutes, and that restore has been rehearsed end-to-end into a scratch copy with live data untouched. Be straight about the one gap if asked: on this demo machine the backups sit on the same disk as the data, because it only has one. Moving them is a single configuration line.
+
+**"Why do the search results appear before the written answer?"**
+Because they're ready first. Finding the documents is fast; composing a cited answer about them costs an extra AI round-trip. Rather than make you wait for the slower half, the documents are sent as soon as they exist and the answer follows on the same connection — results at about three seconds, answer at about four and a half.
+
+**"Why doesn't the answer stream in word-by-word like ChatGPT?"**
+Deliberate. The answer is assembled from individual claims that are each *checked* before being shown — every number in a claim has to appear in the excerpt it cites, and claims that fail are dropped. Streaming raw words would mean showing you text the checker is about to reject and then taking it back. We'd rather be a second slower than briefly show an unverified claim.
+
+**"Search sometimes feels slower than other times — why?"**
+Honest answer: two of the AI services are on free tiers with hard per-minute limits, and roughly five searches a minute is enough to hit one. When that happens the system doesn't fail — it degrades — but it waits. The fixed pipeline cost has been cut to under half a second; almost all remaining time is those external calls. Paid tiers are a purchasing decision, and the system already has the measurements to justify it.
+
 **"What if the same document was scanned twice and both copies ended up in the system?"**
 Handled two ways: at upload, the system flags likely rescans for a human to resolve. At search/chat time, if two near-identical copies both come up for the same question, the system now automatically cites from just one of them consistently, instead of the answer and its citation pointing at two different copies of the same content — confirmed live against a real duplicate pair already in the account.
 
 ---
 
-## 10. Glossary
+## 11. Glossary
 
 Every term used above, defined plainly, so nothing in a follow-up question catches you off guard.
 
@@ -339,6 +455,12 @@ Every term used above, defined plainly, so nothing in a follow-up question catch
 | **Entity graph** | A network linking the same real-world person, property, or organization across multiple separate documents. |
 | **Confidence score** | A number the AI attaches to each extracted value showing how sure it is — used to route uncertain answers to a human instead of guessing. |
 | **Human-in-the-loop** | A design rule that a person must explicitly confirm an AI's output before it's treated as an official fact. |
+| **Celery Beat** | The scheduler that fires recurring jobs on time. Distinct from a worker, which only runs what something else has already queued — without Beat, a "daily" job is defined but never happens. |
+| **SSE (Server-Sent Events)** | A way for the server to push several pieces of one response to the browser as they become ready, over a single connection — used here to show search results before the AI answer is finished. |
+| **Object Lock / WORM** | Write-Once-Read-Many storage. A record written under COMPLIANCE-mode lock cannot be altered or deleted by anyone — including the account owner — until its retention period expires. |
+| **RPO / RTO** | Recovery Point Objective (how much recent work a failure could lose — here, your backup interval) and Recovery Time Objective (how long restoring takes — here, about six minutes). |
+| **Rate limit / throttling** | A cap on how many requests an external service accepts per minute. Exceeding it doesn't break the system, but it waits — the main reason search timing varies. |
+| **Re-ranking probe** | A second pass that re-scores search candidates for real relevance. This system runs two per search, one in each script, because an English-only probe scores Marathi documents near zero. |
 
 ---
 

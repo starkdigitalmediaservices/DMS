@@ -82,6 +82,38 @@ someone deliberately pointing it at the superuser.)
 
 ---
 
+## The WORM archive — verified state
+
+`docsearch-archive` has Object Lock **enabled** and versioning **enabled**,
+confirmed 2026-09-21 via the S3 API:
+
+```
+get_object_lock_configuration -> {'ObjectLockEnabled': 'Enabled'}
+get_bucket_versioning         -> 'Enabled'
+```
+
+Immutability was tested live, not inferred. Writing an object with
+`ObjectLockMode=COMPLIANCE`, then attempting to permanently remove that
+version:
+
+```
+delete_object(Key, VersionId) -> ClientError: InvalidRequest, "Object is WORM"
+```
+
+A plain `delete_object` (no VersionId) creates a delete marker and the locked
+version survives, which is correct S3 behaviour. An overwrite creates a *new
+version* rather than replacing the locked one — Object Lock protects versions,
+not the key name.
+
+**Do not be misled by `mc retention info`**, which reports "Object locking is
+not enabled" for this bucket. That command describes the bucket's *default
+retention rule*, not whether Object Lock is enabled. No default rule is set
+here, and that is deliberate: `archive_file_with_retention()` applies retention
+per object using the document's own retention class, which a single blanket
+bucket-wide period would override. (This distinction cost a false "WORM is not
+enforced" finding earlier on 2026-09-21 — check
+`get_object_lock_configuration`, not `mc retention info`.)
+
 ## Verification
 
 `verify.py` runs automatically after both backup and restore. It checks four
@@ -171,12 +203,12 @@ hypothesis.
 - **A purge racing the backup** can orphan a reference between the two phases.
   The verifier detects it; to avoid it entirely, `docker compose stop beat`
   during the backup window.
-- **The WORM archive bucket has no Object Lock enabled.** Checked on
-  2026-09-21: `mc retention info` reports "Object locking is not enabled",
-  despite `ensure_archive_bucket_exists()` intending it. Object Lock can only
-  be set at bucket creation, so fixing this means recreating the bucket. Until
-  then the archive is a normal bucket and its immutability guarantee is not
-  actually enforced by storage.
+- **The WORM archive is immutable, but a backup of it is not.** The bucket's
+  Object Lock only binds inside MinIO; once `backup.sh` copies those objects
+  out they are ordinary files on disk, and anyone with the backup can alter
+  them. Treat the archive's evidentiary weight as resting on the live bucket,
+  and give backup storage its own retention controls if the backup is meant to
+  carry the same guarantee.
 - **Single-machine assumption** — scripts drive `docker compose`. A managed
   Postgres or real S3 needs the equivalent commands against those endpoints.
 - **Restore is all-or-nothing per database.** No per-tenant restore.

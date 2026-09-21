@@ -375,6 +375,8 @@ async def poll_scanner_inbox_once() -> int:
                     proc_content,
                     proc_filename,
                     db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
                     content_type=proc_mime,
                     folder_id=folder_id,
                 )

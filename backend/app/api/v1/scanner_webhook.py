@@ -27,7 +27,7 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -37,6 +37,7 @@ from app.models.user import User
 from app.schemas.auth import TokenPayload
 from app.models.metadata_item import MetadataItem
 from app.services.connector_ingest_service import (
+    DEFAULT_CONNECTOR_EMAIL,
     already_ingested,
     get_connector_actor,
     get_or_create_folder_path,
@@ -96,10 +97,32 @@ async def verify_scanner_auth(
     # 1. Check Secret Header Authentication
     if secret_candidate and hmac.compare_digest(secret_candidate, expected_secret):
         if x_user_email:
-            result = await db.execute(select(User).where(User.email == x_user_email.strip()))
+            # iam_dg_users' RLS only permits a by-email lookup when
+            # app.login_lookup_email matches the row (the same narrow
+            # exception login/signup rely on). Without setting it, this
+            # SELECT matched nothing no matter who was asked for, and the
+            # branch fell through to the connector actor — so a caller that
+            # explicitly said "ingest as this user" silently got the scan
+            # filed under a different account instead, with no error.
+            # Naming a user is only reachable after the shared secret above
+            # has already been verified, which is this endpoint's trust
+            # boundary; that caller can ingest as the connector actor
+            # regardless, so letting it name a user within the same
+            # boundary grants nothing extra.
+            requested_email = x_user_email.strip()
+            await db.execute(
+                text("SELECT set_config('app.login_lookup_email', :e, false)"),
+                {"e": requested_email},
+            )
+            result = await db.execute(select(User).where(User.email == requested_email))
             user = result.scalar_one_or_none()
             if user:
                 return user.tenant_id, user.id
+            logger.warning(
+                "Scanner auth: X-User-Email '%s' did not match any user — "
+                "falling back to the default connector actor.",
+                requested_email,
+            )
         tenant_id, user_id = await get_connector_actor(db)
         return tenant_id, user_id
 
@@ -154,7 +177,25 @@ async def receive_scan_inbound(
             pass
 
     # 2. Verify Authentication
+    #
+    # Same D-2 fix as email_webhook.py's receive_email_webhook: this route
+    # is authenticated by a shared webhook secret or a bearer JWT, not a
+    # per-tenant get_tenant_db() session, so RLS gets no tenant context for
+    # free. Without the two set_config() calls below, verify_scanner_auth's
+    # own get_connector_actor() lookup is blocked by iam_dg_users' RLS
+    # (no tenant known yet -- same narrow login_lookup_email escape hatch
+    # login/signup use), and every write after auth resolves (the "Scanned
+    # Documents" folder, the ingested document, its quality-flag metadata)
+    # is rejected by the tenant_isolation_policy's WITH CHECK -- which is
+    # exactly what left this endpoint 500ing on every request.
+    await db.execute(
+        text("SELECT set_config('app.login_lookup_email', :e, false)"),
+        {"e": DEFAULT_CONNECTOR_EMAIL},
+    )
     tenant_id, user_id = await verify_scanner_auth(request, db=db)
+    await db.execute(
+        text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": str(tenant_id)}
+    )
 
     # 3. Read File Content
     filename = "scanned_document.pdf"
@@ -234,6 +275,8 @@ async def receive_scan_inbound(
             proc_content,
             proc_filename,
             db,
+            tenant_id=tenant_id,
+            user_id=user_id,
             content_type=proc_mime,
             folder_id=folder_id,
         )

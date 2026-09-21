@@ -170,7 +170,13 @@ async def poll_source_once(source: WatchSource) -> int:
                 folder_id = await get_or_create_folder_path(db, tenant_id, subfolder_segments, folder_cache) \
                     if subfolder_segments else None
                 resp = await ingest_bytes(content, path.name, db, tenant_id, user_id, content_type=content_type, folder_id=folder_id)
-                logger.info("Watched folder [%s]: ingested '%s' as document %s", source.name, rel_parts, resp.document_id)
+                # rel_parts is a path tuple; "/".join it so the log reads
+                # 'Vendors/invoice.pdf' rather than the Python repr
+                # "('Vendors', 'invoice.pdf')".
+                logger.info(
+                    "Watched folder [%s]: ingested '%s' as document %s",
+                    source.name, "/".join(rel_parts), resp.document_id,
+                )
                 dest_processed.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(path), str(dest_processed / path.name))
                 ingested += 1

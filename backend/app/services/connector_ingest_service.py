@@ -21,6 +21,7 @@ from starlette.datastructures import Headers
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..models.document import Document
 from ..models.document_version import DocumentVersion
 from ..models.folder import Folder
@@ -30,7 +31,13 @@ from ..schemas.document import DocumentUploadResponse
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONNECTOR_EMAIL = "teamworklax@gmail.com"
+# Was a hardcoded literal pointing at an email no seeded user actually has,
+# which meant every connector (SFTP, watched-folder, email-in) failed on
+# every single poll with "Connector actor not found" -- see
+# settings.connector_actor_email's own docstring. Now sourced from config
+# so an environment can point it at a real account instead of being broken
+# out of the box.
+DEFAULT_CONNECTOR_EMAIL = settings.connector_actor_email
 
 _actor_cache: dict[str, tuple[UUID, UUID]] = {}
 

@@ -15,7 +15,12 @@ class Template(Base):
     that field's own validation (pattern/min/max/allowed_values) — driven
     by data, not code, so a new form era never requires a deploy. Validation
     is written per template, never once for everything (Section 12).
-    Global (not tenant-scoped): a form's layout doesn't vary per tenant.
+
+    tenant_id is nullable: templates seeded before this column existed are
+    NULL and stay readable by every tenant (a form's layout doesn't vary
+    per tenant); a template created through the API now (see
+    template_service.create_template) is scoped to its creating tenant, the
+    only shape doc_dg_templates' RLS WITH CHECK actually allows on INSERT.
 
     T26 — layout='spread' marks a register whose entries run across two
     facing pages; each field_schema entry then also carries a "half":

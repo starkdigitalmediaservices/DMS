@@ -88,14 +88,24 @@ async def create_template(
     db: AsyncSession, form_type: str, era_label: str, field_schema: List[Dict[str, Any]],
     layout: str, actor_id: uuid.UUID, tenant_id: uuid.UUID,
 ) -> Template:
-    """Template is a global resource (no tenant_id column, T24) — any tenant's
-    it_admin can register a form type. The audit entry still needs a
-    tenant_id, so it's logged against the creating actor's own tenant."""
+    """Any tenant's it_admin can register a form type (T24). Templates are
+    tenant-scoped on creation — the row's tenant_id is set to the creating
+    actor's own tenant, both because that's what the audit entry needs and
+    because doc_dg_templates' RLS WITH CHECK requires a real tenant_id on
+    every INSERT (a NULL insert is always rejected, even though NULL rows,
+    once they exist, are readable by every tenant — see the seeded
+    templates predating this table's tenant_id column). This function used
+    to build the Template row without ever setting tenant_id at all, so
+    every create attempt failed RLS and 500'd; this docstring previously
+    (incorrectly) claimed the column didn't exist."""
     if layout not in VALID_LAYOUTS:
         raise HTTPException(status_code=400, detail=f"layout must be one of {VALID_LAYOUTS}")
     _validate_field_schema(field_schema)
 
-    template = Template(form_type=form_type, era_label=era_label, field_schema=field_schema, layout=layout)
+    template = Template(
+        tenant_id=tenant_id, form_type=form_type, era_label=era_label,
+        field_schema=field_schema, layout=layout,
+    )
     db.add(template)
     try:
         await db.flush()

@@ -4,6 +4,22 @@
   "main": "src/index.js",
   "compatibility_date": "2024-09-23",
   "vars": {
-    "BACKEND_URL": "https://disagree-penknife-getaway.ngrok-free.dev"
+    // REQUIRED: the public base URL of the DMS backend this worker forwards
+    // inbound mail to. Must be reachable from Cloudflare's edge.
+    //
+    // This previously held a personal ngrok tunnel
+    // (https://disagree-penknife-getaway.ngrok-free.dev) that had already
+    // stopped resolving — a deployed worker pointed at it accepted mail and
+    // then failed every delivery. Free ngrok URLs are ephemeral and must
+    // never be committed here as if they were durable.
+    //
+    // Override per environment rather than editing this line:
+    //   wrangler deploy --var BACKEND_URL:https://dms.example.com
+    "BACKEND_URL": "https://dms.invalid.example"
   }
+  // WEBHOOK_SECRET is deliberately NOT declared here. It authenticates every
+  // request to /api/v1/connectors/email-inbound and must match the backend's
+  // EMAIL_WEBHOOK_SECRET, so it belongs in encrypted secret storage, not in
+  // committed config:
+  //   wrangler secret put WEBHOOK_SECRET
 }

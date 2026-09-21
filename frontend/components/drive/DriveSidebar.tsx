@@ -92,7 +92,7 @@ export function DriveSidebar({
                       className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl hover:bg-[#f0f4f9] font-bold text-left text-primary"
                     >
                       <Camera className="w-4 h-4 text-purple-600" />
-                      <span>Scan Document 📸</span>
+                      <span>{t("drive.nav.scan_document", "Scan Document")} 📸</span>
                     </button>
 
                     <div className="h-px bg-[#e1e3e1] my-1" />

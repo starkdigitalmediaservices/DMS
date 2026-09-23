@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     ai_embed_provider: Literal['openai', 'bgem3', 'gemini', 'cohere'] = 'bgem3'
     ai_embed_fallback_provider: Literal['cohere', 'openai', 'none'] = 'none'
     ai_rerank_provider: Literal['cohere', 'bgem3', 'none'] = 'cohere'
-    ai_ocr_provider: Literal['pdfplumber', 'llamaparse', 'paddleocr', 'chandra'] = 'pdfplumber'
+    ai_ocr_provider: Literal['pdfplumber', 'llamaparse', 'paddleocr', 'chandra', 'groq'] = 'pdfplumber'
 
     # T22 — VLM extraction path. Gemini (direct) and OpenRouter (proxying any
     # OpenRouter-hosted vision model, openrouter_vlm_model) are wired up.
@@ -142,6 +142,13 @@ class Settings(BaseSettings):
     groq_api_key3: str = ''
     groq_api_keys: str = ''
     groq_llm_model: str = 'openai/gpt-oss-120b'
+    # AI_OCR_PROVIDER=groq: vision model used to read scanned pages. Must be
+    # enabled for at least one key's Groq organization (keys whose org has it
+    # blocked are skipped). Free tier is ~7k input tokens/min per org, and a
+    # page costs ~1 token per 28x28 px, hence the pixel cap.
+    groq_vision_model: str = 'qwen/qwen3.8-27b'
+    groq_ocr_max_pixels: int = 1_600_000
+    groq_ocr_timeout_seconds: float = 300.0
     
     def get_groq_api_keys(self) -> List[str]:
         keys = []
@@ -179,6 +186,16 @@ class Settings(BaseSettings):
     # pulled out into settings and given a real value in .env. Point this at
     # an existing user's email for connectors to work at all.
     connector_actor_email: str = 'teamworklax@gmail.com'
+
+    # Scan quality check on every uploaded image (app/services/scan_quality_service.py).
+    # A failing image is still ingested, just flagged for "Needs Review".
+    # Thresholds are initial guesses, not tuned against the real corpus yet.
+    scan_quality_check_enabled: bool = True
+    scan_quality_min_sharpness: float = 100.0     # Laplacian variance; lower = blurry
+    scan_quality_min_brightness: float = 40.0     # mean grayscale 0-255; lower = underexposed
+    scan_quality_max_brightness: float = 245.0    # mean grayscale 0-255; higher = overexposed
+    scan_quality_min_blank_variance: float = 100.0  # pixel variance; lower = likely blank page
+    scan_quality_min_resolution_px: int = 800     # shorter edge; lower = too small for OCR
 
     # SFTP connector (demo scope: single fixed server/credentials/remote dir)
     sftp_enabled: bool = False

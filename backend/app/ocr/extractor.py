@@ -217,13 +217,109 @@ def _chandra_ocr_image(pil_img) -> str:
         raise Exception(f"Chandra conversion did not complete within {timeout}s")
 
 
+_GROQ_OCR_PROMPT = (
+    "Transcribe ALL text in this scanned document page exactly as written. "
+    "Keep the original script and language (Marathi/Devanagari, Hindi, Urdu, English) -- "
+    "do not translate or transliterate. Copy numbers, dates, survey/serial numbers and "
+    "names character for character. Preserve reading order; put each table row on its own "
+    "line with cells separated by ' | '. Include handwritten text. If something is "
+    "illegible write [illegible]. Output only the transcription: no commentary, no "
+    "markdown fences. If the page has no text at all, output nothing."
+)
+
+# Keys that answered "model blocked at the organization level" -- skipped
+# for the rest of this process instead of costing a round trip per page.
+_groq_blocked_keys: set = set()
+_groq_key_cursor = 0
+
+
+def _groq_ocr_image(pil_img) -> str:
+    """OCR via a Groq-hosted vision model (settings.groq_vision_model),
+    synchronous like _chandra_ocr_image (runs inside asyncio.to_thread).
+
+    Groq's free on-demand tier allows roughly 7k input tokens/minute per
+    organization for vision models, and an image costs ~1 token per 28x28
+    pixels -- so the page is downscaled to groq_ocr_max_pixels first, and
+    429s are handled by moving to the next key or honouring retry-after.
+    Keys whose organization has the model blocked (403) are skipped. No
+    per-word coordinates, same as chandra: page-level regions only."""
+    import base64
+    import time
+    import httpx
+    from app.config import settings
+
+    global _groq_key_cursor
+    keys = [k for k in settings.get_groq_api_keys() if k not in _groq_blocked_keys]
+    if not keys:
+        raise RuntimeError("No Groq API key with access to the vision model is configured")
+
+    img = pil_img.convert("RGB")
+    max_px = settings.groq_ocr_max_pixels
+    if img.width * img.height > max_px:
+        scale = (max_px / float(img.width * img.height)) ** 0.5
+        img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    payload = {
+        "model": settings.groq_vision_model,
+        "temperature": 0,
+        "max_completion_tokens": 4096,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": _GROQ_OCR_PROMPT},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ]}],
+    }
+
+    deadline = time.monotonic() + settings.groq_ocr_timeout_seconds
+    last_error = ""
+    with httpx.Client(timeout=120.0) as client:
+        while time.monotonic() < deadline:
+            keys = [k for k in settings.get_groq_api_keys() if k not in _groq_blocked_keys]
+            if not keys:
+                break
+            waits = []
+            for _ in range(len(keys)):
+                key = keys[_groq_key_cursor % len(keys)]
+                _groq_key_cursor += 1
+                resp = client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json=payload,
+                )
+                if resp.status_code == 200:
+                    text = resp.json()["choices"][0]["message"].get("content") or ""
+                    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+                    text = re.sub(r"^```\w*\n|\n```$", "", text.strip())
+                    return text.strip()
+                last_error = f"{resp.status_code}: {resp.text[:300]}"
+                if resp.status_code == 403 and "blocked" in resp.text:
+                    _groq_blocked_keys.add(key)
+                    continue
+                if resp.status_code == 429:
+                    try:
+                        waits.append(float(resp.headers.get("retry-after", "5")))
+                    except ValueError:
+                        waits.append(5.0)
+                    continue
+                if resp.status_code >= 500:
+                    waits.append(3.0)
+                    continue
+                raise Exception(f"Groq OCR request failed with status {last_error}")
+            if not waits:
+                break
+            time.sleep(min(min(waits) + 0.5, max(0.0, deadline - time.monotonic())))
+    raise Exception(f"Groq OCR gave up: {last_error or 'no usable key'}")
+
+
 def extract_pages_from_file(file_bytes: bytes, filename: str, ocr_engine: str = "tesseract") -> List[Dict[str, Any]]:
     """
     Extract structured pages and text content from various file formats:
     PDF, Word (.docx), Excel (.xlsx, .csv), PowerPoint (.pptx), Markdown (.md),
     RTF (.rtf), JSON (.json), Images (.jpg, .png, etc.), and Plain Text files.
 
-    ocr_engine ('tesseract' | 'paddle' | 'chandra') only affects the
+    ocr_engine ('tesseract' | 'paddle' | 'chandra' | 'groq') only affects the
     PDF/image paths — every other format here doesn't involve OCR at all.
     """
     ext = filename.lower().split(".")[-1] if "." in filename else ""
@@ -259,6 +355,8 @@ def _extract_image(file_bytes: bytes, filename: str, ocr_engine: str = "tesserac
         if ocr_engine == "paddle":
             text = _paddle_ocr_image(img) or ""
             words = _paddle_word_boxes(img)
+        elif ocr_engine == "groq":
+            text = _groq_ocr_image(img) or ""
         elif ocr_engine == "chandra":
             text = _chandra_ocr_image(img) or ""
             # T05 — Chandra's /convert endpoint (used here in plain-text
@@ -341,6 +439,8 @@ def _extract_pdf(file_bytes: bytes, filename: str = "", ocr_engine: str = "tesse
                             ocr_text = _paddle_ocr_image(pil_img) or ""
                         elif ocr_engine == "chandra":
                             ocr_text = _chandra_ocr_image(pil_img) or ""
+                        elif ocr_engine == "groq":
+                            ocr_text = _groq_ocr_image(pil_img) or ""
                         else:
                             import pytesseract
                             ocr_text = pytesseract.image_to_string(pil_img, lang=TESSERACT_LANG) or ""
@@ -359,7 +459,7 @@ def _extract_pdf(file_bytes: bytes, filename: str = "", ocr_engine: str = "tesse
                             # in the mode used here, so it's left at [].
                             if ocr_engine == "paddle":
                                 words = _paddle_word_boxes(pil_img)
-                            elif ocr_engine != "chandra":
+                            elif ocr_engine not in ("chandra", "groq"):
                                 words = _tesseract_word_boxes(pil_img, TESSERACT_LANG)
                     except Exception as ocr_err:
                         logger.warning(f"OCR fallback ({ocr_engine}) failed for page {i+1} of {filename}: {ocr_err}")

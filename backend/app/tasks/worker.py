@@ -25,6 +25,7 @@ from ..services.config_service import get_int, get_float
 from ..services.extraction_archive_service import get_cached_ocr, record_ocr
 from ..services import duplicate_service
 from ..services.source_location_service import locate_value_in_pages
+from ..services.scan_quality_service import assess_scan_quality, is_image
 from ..config import settings
 
 celery_app = Celery(
@@ -240,6 +241,15 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
         full_text = " ".join([p.get("text", "") for p in pages])
         meta_dict = await extract_metadata(full_text)
 
+        # 5b. Scan quality (images only). Never blocks ingestion: a failing
+        # scan is still indexed, just flagged into "Needs Review".
+        quality_report = None
+        if is_image(os.path.splitext(filename)[1].lower(), file_bytes):
+            try:
+                quality_report = assess_scan_quality(file_bytes)
+            except Exception as q_err:
+                logger.warning(f"Scan quality check failed during worker ingestion: {q_err}")
+
         # 6. ATOMIC DATABASE TRANSACTION (All-or-Nothing Commit)
         # All database writes (chunks, metadata, document status) occur inside a single atomic transaction.
         async with TaskSession() as db:
@@ -253,6 +263,35 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
                         MetadataItem.key.not_in(["quality_flag", "quality_report"]),
                     )
                 )
+
+                # A fresh quality result replaces the previous one (the purge
+                # above keeps quality rows so a text-only re-extraction doesn't
+                # erase them); without this a re-ingested scan would stack a
+                # second flag on top of the first.
+                if quality_report is not None:
+                    await db.execute(
+                        delete(MetadataItem).where(
+                            MetadataItem.document_id == document_id,
+                            MetadataItem.key.in_(["quality_flag", "quality_report"]),
+                        )
+                    )
+                    if not quality_report.get("passed", True):
+                        db.add(MetadataItem(
+                            tenant_id=tenant_id,
+                            document_id=document_id,
+                            key="quality_flag",
+                            value={"flag": "needs_review", "warnings": quality_report.get("warnings", [])},
+                            source="scan_quality",
+                            confidence_score=0.9,
+                        ))
+                        db.add(MetadataItem(
+                            tenant_id=tenant_id,
+                            document_id=document_id,
+                            key="quality_report",
+                            value=quality_report,
+                            source="scan_quality",
+                            confidence_score=1.0,
+                        ))
 
                 # Insert chunks
                 for idx, chunk in enumerate(chunks):

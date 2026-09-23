@@ -23,6 +23,10 @@ def get_ocr_provider() -> OCRProvider:
             enforce_local('OCR', 'chandra')
             from app.ocr.providers.chandra_ocr_provider import ChandraOCRProvider
             _ocr_provider = ChandraOCRProvider()
+        elif settings.ai_ocr_provider == 'groq':
+            enforce_local('OCR', 'groq')
+            from app.ocr.providers.groq_ocr_provider import GroqOCRProvider
+            _ocr_provider = GroqOCRProvider()
         else:
             raise ValueError(f"Unknown OCR provider: {settings.ai_ocr_provider}")
     return _ocr_provider

@@ -170,8 +170,8 @@ class Settings(BaseSettings):
     rate_limit_per_tenant: str = '1000/minute'
 
     # Shared connector actor (demo scope, T40): every non-interactive
-    # ingestion source (SFTP, watched-folder, legacy IMAP, the email-inbound
-    # webhook, and the scanner connector's own actor fallback) attributes
+    # ingestion source (SFTP, watched-folder, legacy IMAP and the email-inbound
+    # webhook) attributes
     # its documents to this one existing user/tenant rather than resolving
     # a per-source mapping. Was previously a hardcoded, unconfigurable
     # constant pointing at an email no seeded user actually has — every
@@ -207,23 +207,6 @@ class Settings(BaseSettings):
     email_password: str = ''
     email_address: str = 'connector@dms.local'
 
-    # Scanner connector (TWAIN & Network-Scan Integration - T44)
-    scanner_enabled: bool = False
-    scanner_inbox_dir: str = '/app/scanner_inbox'
-    scanner_default_dpi: int = 300
-    scanner_poll_interval_seconds: int = 15
-    scanner_max_upload_size_mb: int = 50
-    scanner_webhook_secret: str = 'change_me_scanner_secret'
-
-    # Scanner quality validation (Initial guesses, need tuning against real production scan samples)
-    scanner_quality_check_enabled: bool = True
-    scanner_min_sharpness_threshold: float = 100.0  # Initial guess, needs tuning (Laplacian variance)
-    scanner_min_brightness: float = 40.0             # Initial guess, needs tuning (Mean grayscale 0-255, <40 = underexposed)
-    scanner_max_brightness: float = 245.0            # Initial guess, needs tuning (Mean grayscale 0-255, >245 = overexposed)
-    scanner_min_blank_variance: float = 100.0        # Initial guess, needs tuning (Pixel variance <100 = blank page)
-    scanner_min_resolution_px: int = 800             # Initial guess, needs tuning (Shorter edge minimum px for OCR)
-    scanner_max_skew_degrees: float = 5.0            # Initial guess, needs tuning (Informative metric)
-
     # The host/port an OUTSIDE machine should use to SEND mail into the demo
     # mailbox over SMTP (not the IMAP host/port above, which the backend uses
     # to poll it).
@@ -257,24 +240,11 @@ class Settings(BaseSettings):
         if self.app_env == "production":
             if self.jwt_secret_key.lower() in WEAK_SECRETS or len(self.jwt_secret_key) < 32:
                 raise ValueError("In production, JWT_SECRET_KEY must be a strong secret of at least 32 characters")
-            # Real gap found live 2026-09-08 (merging scanner-feature): a
-            # test already expected this check, but it was never actually
-            # implemented -- the scanner webhook route authenticates
-            # inbound scan uploads against this secret (see
-            # scanner_webhook.py), so leaving it at the shipped default
-            # in production lets anyone who's read the source code post
-            # documents as any tenant. Only enforced when the scanner
-            # connector is actually turned on -- installs that never
-            # enable it were never exposed to this in the first place.
-            if self.scanner_enabled and self.scanner_webhook_secret == 'change_me_scanner_secret':
-                raise ValueError("In production, SCANNER_WEBHOOK_SECRET must be set to a real secret when scanner_enabled is true")
-
-            # Same exposure as the scanner secret above, but worse in two
-            # ways: email_webhook_enabled defaults to True (the scanner
-            # defaults to off), and this secret is the ONLY thing standing
-            # in front of /connectors/email-inbound, which ingests documents
-            # as the connector actor. A shipped default here means anyone
-            # who has read the source can post documents into the tenant.
+            # email_webhook_enabled defaults to True, and this secret is the
+            # ONLY thing standing in front of /connectors/email-inbound, which
+            # ingests documents as the connector actor. A shipped default here
+            # means anyone who has read the source can post documents into the
+            # tenant.
             if self.email_webhook_enabled and self.email_webhook_secret == _SHIPPED_EMAIL_WEBHOOK_SECRET:
                 raise ValueError(
                     "In production, EMAIL_WEBHOOK_SECRET must be changed from the shipped default "

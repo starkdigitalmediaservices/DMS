@@ -52,17 +52,4 @@ async def get_connector_info(current_user: TokenPayload = Depends(require_tenant
                     "another machine — use the SFTP connector above to share "
                     "files from a different computer.",
         },
-        "scanner": {
-            "enabled": settings.scanner_enabled,
-            "inbound_endpoint": "/api/v1/connectors/scan-inbound",
-            "status_endpoint": "/api/v1/connectors/scanner/status",
-            "inbox_dir": settings.scanner_inbox_dir,
-            "default_dpi": settings.scanner_default_dpi,
-            "max_upload_size_mb": settings.scanner_max_upload_size_mb,
-            "poll_interval_seconds": settings.scanner_poll_interval_seconds,
-            "note": "TWAIN & Network-Scan integration (T44). Accepts direct scan uploads via "
-                    "POST /api/v1/connectors/scan-inbound (with DPI, color mode, device metadata) "
-                    "and polls network office scanners (MFPs) scanning to /app/scanner_inbox. "
-                    "Auto-maps scans into 'Scanned Documents' folder and converts multi-page TIFFs to PDF/A.",
-        },
     }

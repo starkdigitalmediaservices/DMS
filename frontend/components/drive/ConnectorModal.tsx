@@ -6,7 +6,6 @@ import { api } from "@/lib/api";
 interface ConnectorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLaunchScanner?: () => void;
 }
 
 interface ConnectorInfo {
@@ -24,16 +23,6 @@ interface ConnectorInfo {
     address: string;
     smtp_host: string;
     smtp_port: number;
-    note: string;
-  };
-  scanner?: {
-    enabled: boolean;
-    inbound_endpoint: string;
-    status_endpoint: string;
-    inbox_dir: string;
-    default_dpi: number;
-    max_upload_size_mb: number;
-    poll_interval_seconds: number;
     note: string;
   };
 }
@@ -66,11 +55,11 @@ function CopyField({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function ConnectorModal({ isOpen, onClose, onLaunchScanner }: ConnectorModalProps) {
+export function ConnectorModal({ isOpen, onClose }: ConnectorModalProps) {
   const [info, setInfo] = useState<ConnectorInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"sftp" | "email" | "scanner">("sftp");
+  const [activeTab, setActiveTab] = useState<"sftp" | "email">("sftp");
 
   useEffect(() => {
     if (!isOpen) return;
@@ -125,14 +114,6 @@ export function ConnectorModal({ isOpen, onClose, onLaunchScanner }: ConnectorMo
               >
                 Email
               </button>
-              <button
-                onClick={() => setActiveTab("scanner")}
-                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                  activeTab === "scanner" ? "bg-primary text-white" : "text-textMuted hover:text-textMain"
-                }`}
-              >
-                Scanner / TWAIN
-              </button>
             </div>
 
             {activeTab === "sftp" && (
@@ -181,38 +162,6 @@ export function ConnectorModal({ isOpen, onClose, onLaunchScanner }: ConnectorMo
               </>
             )}
 
-            {activeTab === "scanner" && (
-              <>
-                <p className="text-sm text-textMuted">
-                  Digitize paper documents directly into the DMS from desktop scanners (TWAIN), office network MFP scanners, or your camera.
-                </p>
-
-                {onLaunchScanner && (
-                  <button
-                    onClick={() => {
-                      onClose();
-                      onLaunchScanner();
-                    }}
-                    className="w-full py-2.5 bg-primary hover:bg-primaryHover text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-colors"
-                  >
-                    📸 Launch Web Camera Scanner
-                  </button>
-                )}
-
-                <div className="space-y-3">
-                  <CopyField label="HTTP Inbound Endpoint" value={info.scanner?.inbound_endpoint || "/api/v1/connectors/scan-inbound"} />
-                  <CopyField label="Network Scan Folder" value={info.scanner?.inbox_dir || "/app/scanner_inbox"} />
-                  <div className="grid grid-cols-2 gap-3">
-                    <CopyField label="Default DPI" value={`${info.scanner?.default_dpi || 300} DPI`} />
-                    <CopyField label="Max Size" value={`${info.scanner?.max_upload_size_mb || 50} MB`} />
-                  </div>
-                </div>
-
-                <div className="text-xs text-textMuted bg-surface rounded-lg px-4 py-3 border border-borderDark">
-                  {info.scanner?.note || "TWAIN & Network-Scan integration. Accepts direct scan uploads via POST /api/v1/connectors/scan-inbound and polls network office scanners scanning to /app/scanner_inbox. Multi-page TIFFs auto-converted to PDF/A."}
-                </div>
-              </>
-            )}
           </>
         )}
       </div>

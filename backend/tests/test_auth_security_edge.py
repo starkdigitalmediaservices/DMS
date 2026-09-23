@@ -79,13 +79,3 @@ def test_production_secrets_validation():
             jwt_secret_key="secret"
         )
 
-    with pytest.raises(ValueError, match="SCANNER_WEBHOOK_SECRET must be set"):
-        Settings(
-            app_env="production",
-            postgres_url="postgresql+asyncpg://u:p@localhost:5432/db",
-            redis_url="redis://localhost:6379/0",
-            jwt_secret_key="a_very_strong_production_jwt_secret_key_12345",
-            scanner_enabled=True,
-            scanner_webhook_secret="change_me_scanner_secret"
-        )
-

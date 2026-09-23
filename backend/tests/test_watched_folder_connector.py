@@ -1,6 +1,6 @@
-"""T44 — the watched-folder connector is the supported scanner-integration
-route (a real MFP's "Scan to Network Folder" feature writes into whatever
-directory this module watches; see docs/SCANNER_INTEGRATION.md). Zero
+"""T44 — the watched-folder connector ingests anything dropped into the
+directory this module watches, including a network MFP configured to write
+there by its own "Scan to Network Folder" feature. Zero
 coverage existed for its actual poll/ingest logic before this file --
 test_connector_contract.py only covers the thin Protocol wrapper.
 

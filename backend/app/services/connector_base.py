@@ -45,7 +45,4 @@ def get_enabled_connectors() -> List[Connector]:
     if settings.email_enabled:
         from .email_connector import EmailConnector
         connectors.append(EmailConnector())
-    if settings.scanner_enabled:
-        from .scanner_connector import ScannerConnector
-        connectors.append(ScannerConnector())
     return connectors

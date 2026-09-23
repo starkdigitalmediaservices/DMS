@@ -20,6 +20,7 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import RegionHighlightViewer from "@/components/drive/RegionHighlightViewer";
 import { useI18n } from "@/lib/i18n";
+import { useRole } from "@/lib/permissions";
 
 interface FieldProvenance {
   kind: "base" | "amendment";
@@ -136,6 +137,10 @@ function TierBadge({ tier }: { tier: number }) {
 
 export default function Entity360Page() {
   const { t } = useI18n();
+  // Confirm/revert of held/verified edges is an entity-graph edit —
+  // reviewer roles only; everyone else just reads the 360 view.
+  const { can: roleCan } = useRole();
+  const canEditGraph = roleCan("entities.edit");
   const [nodeId, setNodeId] = useState("");
   const [data, setData] = useState<Entity360 | null>(null);
   const [loading, setLoading] = useState(false);
@@ -418,7 +423,7 @@ export default function Entity360Page() {
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <EdgeStatusBadge status={e.status} />
-                      {e.status === "held" && (
+                      {canEditGraph && e.status === "held" && (
                         <button
                           onClick={() => confirmEdge(e.edge_id)}
                           disabled={edgeActionLoading === e.edge_id}
@@ -429,7 +434,7 @@ export default function Entity360Page() {
                           Confirm
                         </button>
                       )}
-                      {e.status === "verified" && (
+                      {canEditGraph && e.status === "verified" && (
                         <button
                           onClick={() => revertEdge(e.edge_id)}
                           disabled={edgeActionLoading === e.edge_id}
@@ -468,7 +473,7 @@ export default function Entity360Page() {
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <EdgeStatusBadge status={e.status} />
-                      {e.status === "held" && (
+                      {canEditGraph && e.status === "held" && (
                         <button
                           onClick={() => confirmEdge(e.edge_id)}
                           disabled={edgeActionLoading === e.edge_id}
@@ -479,7 +484,7 @@ export default function Entity360Page() {
                           Confirm
                         </button>
                       )}
-                      {e.status === "verified" && (
+                      {canEditGraph && e.status === "verified" && (
                         <button
                           onClick={() => revertEdge(e.edge_id)}
                           disabled={edgeActionLoading === e.edge_id}

@@ -1,12 +1,13 @@
 "use client";
 import React, { useState } from "react";
-import { Sparkles, X, User, LogOut, BarChart3, ChevronDown, ShieldCheck, Settings, Network } from "lucide-react";
+import { Sparkles, X, User, LogOut, BarChart3, ChevronDown, ShieldCheck, Settings, Network, UserCog, Building2, LayoutTemplate, SlidersHorizontal, Gauge } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { onKeyActivate } from "@/lib/a11y";
 import { useI18n } from "@/lib/i18n";
 import { LanguageSwitcher } from "@/components/common/LanguageSwitcher";
+import { useRole, displayRole, roleLabel } from "@/lib/permissions";
 
 interface DriveTopHeaderProps {
   onSearch: (query: string, useAi: boolean) => void;
@@ -41,6 +42,9 @@ export function DriveTopHeader({
   const [userName, setUserName] = useState<string>("User");
   const [userEmail, setUserEmail] = useState<string>("");
   const [userInitials, setUserInitials] = useState<string>("U");
+  const { role, can: roleCan } = useRole();
+  const displayedRole = displayRole(role);
+  const roleText = displayedRole ? t(`role.${displayedRole}`, roleLabel(role)) : roleLabel(role);
 
   React.useEffect(() => {
     api.auth.getProfile()
@@ -211,6 +215,14 @@ export function DriveTopHeader({
                 <p className="text-xs text-textMuted uppercase font-semibold tracking-wider">{t("header.account_menu", "Account")}</p>
                 <p className="text-sm font-semibold truncate text-textMain mt-0.5">{userName}</p>
                 {userEmail && <p className="text-xs text-textMuted truncate">{userEmail}</p>}
+                {role && (
+                  <p className="mt-1.5">
+                    <span className="sr-only">{t("header.role", "Role")}: </span>
+                    <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-[#edf2fc] text-[#0d2e5c] border border-[#0d2e5c]/20">
+                      {roleText}
+                    </span>
+                  </p>
+                )}
               </div>
 
               <div className="py-1">
@@ -247,6 +259,64 @@ export function DriveTopHeader({
                   <span>{t("header.entity_360", "Entity 360")}</span>
                 </Link>
               </div>
+
+              {/* Admin-only links — each gated by the single permission map
+                  (lib/permissions.ts), never by ad-hoc role comparisons. */}
+              {(roleCan("analytics.view") || roleCan("users.manage") || roleCan("departments.manage") || roleCan("templates.manage") || roleCan("config.manage")) && (
+                <div className="border-t border-borderDark/60 py-1">
+                  <p className="px-4 pt-1.5 pb-1 text-[10px] text-textMuted uppercase font-semibold tracking-wider">{t("header.administration", "Administration")}</p>
+                  {roleCan("analytics.view") && (
+                  <Link
+                    href="/admin"
+                    onClick={() => setDropdownOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2 text-sm text-textMain hover:bg-white/5 transition-colors font-medium"
+                  >
+                    <Gauge className="w-4 h-4 text-primary" />
+                    <span>{t("header.admin_panel", "Admin Panel")}</span>
+                  </Link>
+                  )}
+                  {roleCan("users.manage") && (
+                  <Link
+                    href="/admin/users"
+                    onClick={() => setDropdownOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2 text-sm text-textMain hover:bg-white/5 transition-colors font-medium"
+                  >
+                    <UserCog className="w-4 h-4 text-primary" />
+                    <span>{t("header.users_roles", "Users & Roles")}</span>
+                  </Link>
+                  )}
+                  {roleCan("departments.manage") && (
+                  <Link
+                    href="/admin/departments"
+                    onClick={() => setDropdownOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2 text-sm text-textMain hover:bg-white/5 transition-colors font-medium"
+                  >
+                    <Building2 className="w-4 h-4 text-primary" />
+                    <span>{t("header.departments", "Departments")}</span>
+                  </Link>
+                  )}
+                  {roleCan("templates.manage") && (
+                  <Link
+                    href="/admin/templates"
+                    onClick={() => setDropdownOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2 text-sm text-textMain hover:bg-white/5 transition-colors font-medium"
+                  >
+                    <LayoutTemplate className="w-4 h-4 text-primary" />
+                    <span>{t("header.form_templates", "Form Templates")}</span>
+                  </Link>
+                  )}
+                  {roleCan("config.manage") && (
+                  <Link
+                    href="/admin/settings"
+                    onClick={() => setDropdownOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2 text-sm text-textMain hover:bg-white/5 transition-colors font-medium"
+                  >
+                    <SlidersHorizontal className="w-4 h-4 text-primary" />
+                    <span>{t("header.admin_settings", "Settings")}</span>
+                  </Link>
+                  )}
+                </div>
+              )}
 
               <div className="border-t border-borderDark/60 pt-1 mt-1">
                 <button

@@ -35,7 +35,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(index=True)
     full_name: Mapped[str] = mapped_column(default="")
     hashed_password: Mapped[str] = mapped_column("password_hash")
-    role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), default=UserRole.user)
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), default=UserRole.operator)
     locale: Mapped[str] = mapped_column(default="en")  # T95 — 'en' or 'mr'
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 

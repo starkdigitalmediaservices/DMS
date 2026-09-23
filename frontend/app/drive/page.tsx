@@ -11,7 +11,6 @@ import { DriveDetailPanel } from "@/components/drive/DriveDetailPanel";
 import { DocumentPreviewModal } from "@/components/drive/DocumentPreviewModal";
 import { NewFolderModal, RenameModal, MoveModal } from "@/components/drive/Modals";
 import { ConnectorModal } from "@/components/drive/ConnectorModal";
-import { WebScannerModal } from "@/components/drive/WebScannerModal";
 import { UploadWidget, UploadItem } from "@/components/drive/UploadWidget";
 import { AISummary } from "@/components/search/AISummary";
 import { ResultCard } from "@/components/search/ResultCard";
@@ -24,7 +23,9 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { offlineStore } from "@/lib/offlineStore";
 
 import { isAuthenticated } from "@/lib/auth";
-import { api } from "@/lib/api";
+import { api, isAccessError, ApiError } from "@/lib/api";
+import { useRole } from "@/lib/permissions";
+import { NoAccess } from "@/components/common/NoAccess";
 import { onKeyActivate } from "@/lib/a11y";
 import { useDebouncedActivation } from "@/lib/useDebouncedActivation";
 import type { Folder, FolderTreeNode, DocumentListItem, DriveStats, SearchResponse, SearchResult } from "@/types";
@@ -52,6 +53,14 @@ const getDaysRemainingInBin = (trashedAtStr?: string | null): { text: string; da
 export default function DrivePage() {
   const router = useRouter();
   const { isOnline } = useOnlineStatus();
+  // Permanent delete (DELETE /documents|folders/{id}) is limited to
+  // records_officer / department_head / it_admin server-side.
+  const { can: roleCan } = useRole();
+  const canDeletePermanent = roleCan("content.deletePermanent");
+  // Set when the current folder/view came back 403/404 — i.e. it's outside
+  // the user's department grants. Rendered as a "no access" state instead
+  // of silently falling back to offline/cached data.
+  const [accessDenied, setAccessDenied] = useState(false);
   const [showAIWarningModal, setShowAIWarningModal] = useState(false);
   const [aiWarningFeature, setAiWarningFeature] = useState("AI Assistant");
 
@@ -177,7 +186,6 @@ export default function DrivePage() {
   // Modals State
   const [isNewFolderOpen, setIsNewFolderOpen] = useState(false);
   const [isConnectorModalOpen, setIsConnectorModalOpen] = useState(false);
-  const [isWebScannerOpen, setIsWebScannerOpen] = useState(false);
   const [itemToRename, setItemToRename] = useState<{ type: "folder" | "doc"; item: Folder | DocumentListItem } | null>(null);
   const [itemToMove, setItemToMove] = useState<{ type: "folder" | "doc"; item: Folder | DocumentListItem } | null>(null);
 
@@ -306,6 +314,9 @@ export default function DrivePage() {
       }
       setFolderPath(path);
     } catch (err) {
+      // Out-of-department folders come back 404 here, while their child
+      // listings come back 200 [] — so this is where "no access" shows up.
+      if (isAccessError(err)) setAccessDenied(true);
       console.warn("Could not resolve breadcrumb path:", err);
     }
   };
@@ -313,6 +324,7 @@ export default function DrivePage() {
   // Fetch Contents Safely
   const loadContents = async () => {
     setLoading(true);
+    setAccessDenied(false);
     try {
       api.documents.getStats().then((s) => setDriveStats(s)).catch(() => {});
       loadFolderTree();
@@ -351,6 +363,12 @@ export default function DrivePage() {
         setDocuments(dList);
       }
     } catch (err) {
+      if (isAccessError(err)) {
+        setFolders([]);
+        setDocuments([]);
+        setAccessDenied(true);
+        return;
+      }
       console.warn("Could not fetch backend drive items, falling back to local offline store:", err);
       const validParentId = isUUID(currentFolderId) ? currentFolderId : null;
       setDriveStats(offlineStore.getStats());
@@ -588,6 +606,7 @@ export default function DrivePage() {
   const handleBulkTrash = async () => {
     const count = selectedFolderIds.size + selectedDocIds.size;
     if (currentView === "trash") {
+      if (!canDeletePermanent) return;
       if (confirm(`Are you sure you want to permanently delete ${count} selected items?`)) {
         for (const fId of Array.from(selectedFolderIds)) {
           await api.folders.deletePermanent(fId).catch(() => {});
@@ -742,6 +761,7 @@ export default function DrivePage() {
   };
 
   const handlePermanentDelete = async (type: "folder" | "doc", id: string) => {
+    if (!canDeletePermanent) return;
     if (!confirm("Are you sure you want to permanently delete this item?")) return;
     try {
       if (isOnline && isUUID(id)) {
@@ -754,6 +774,14 @@ export default function DrivePage() {
         throw new Error("Offline");
       }
     } catch (err) {
+      // A real server answer (403 wrong role, 404 gone, 409 retention…) is
+      // not "offline" — queueing it for later sync and hiding the item
+      // locally would pretend a refused delete succeeded.
+      if (err instanceof ApiError) {
+        alert(`Could not delete: ${err.message}`);
+        loadContents();
+        return;
+      }
       if (type === "folder") {
         offlineStore.addAction({ type: "delete_folder", payload: { folder_id: id } });
         setFolders((prev) => prev.filter((f) => f.id !== id));
@@ -960,6 +988,27 @@ export default function DrivePage() {
     setPreviewDoc(searchDocItem);
   };
 
+  // What the right-hand info panel should describe. selectedDoc/selectedFolder
+  // only ever track PLAIN clicks -- the checkbox path is deliberately
+  // side-effect-free (see handleSelectDoc) -- so on their own they go stale the
+  // moment a checkbox is involved: tick one box and the panel still described
+  // whichever row was clicked earlier, which might not even be selected any
+  // more. Derive the subject from the selection itself, and show nothing while
+  // several rows are selected, since the panel can only ever describe one.
+  const totalSelected = selectedDocIds.size + selectedFolderIds.size;
+  const detailDoc =
+    selectedDocIds.size === 1
+      ? documents.find((d) => selectedDocIds.has(d.id)) ?? selectedDoc
+      : totalSelected === 0
+      ? selectedDoc
+      : null;
+  const detailFolder =
+    selectedFolderIds.size === 1
+      ? folders.find((f) => selectedFolderIds.has(f.id)) ?? selectedFolder
+      : totalSelected === 0
+      ? selectedFolder
+      : null;
+
   return (
     <div className="flex flex-col h-screen w-screen bg-gdriveBg overflow-hidden select-none">
       {/* Hidden File & Folder Inputs */}
@@ -1049,6 +1098,7 @@ export default function DrivePage() {
               <FolderInput className="w-3.5 h-3.5" />
               Move
             </button>
+            {(currentView !== "trash" || canDeletePermanent) && (
             <button
               onClick={handleBulkTrash}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-red-600 bg-white border border-red-200 hover:bg-red-50 transition-colors"
@@ -1056,6 +1106,7 @@ export default function DrivePage() {
               <Trash2 className="w-3.5 h-3.5" />
               {currentView === "trash" ? "Delete permanently" : "Move to Bin"}
             </button>
+            )}
           </div>
         </div>
       )}
@@ -1081,7 +1132,6 @@ export default function DrivePage() {
           onOpenNewFolderModal={() => setIsNewFolderOpen(true)}
           onTriggerFileUpload={() => fileInputRef.current?.click()}
           onOpenConnectorModal={() => setIsConnectorModalOpen(true)}
-          onOpenWebScannerModal={() => setIsWebScannerOpen(true)}
           stats={driveStats}
           folderTree={folderTree}
           activeFolderId={currentFolderId}
@@ -1206,6 +1256,22 @@ export default function DrivePage() {
                 </div>
               ) : null}
             </div>
+          ) : accessDenied ? (
+            <div className="flex-1 flex items-start justify-center pt-10">
+              <NoAccess message="This folder isn't shared with your department. Ask an IT admin to grant your department access if you need it.">
+                <button
+                  onClick={() => {
+                    setCurrentFolderId(null);
+                    setCurrentFolder(null);
+                    setFolderPath([]);
+                    setCurrentView("my-drive");
+                  }}
+                  className="mt-2 px-4 py-1.5 rounded-full text-xs font-semibold bg-white border border-amber-300 text-amber-900 hover:bg-amber-100"
+                >
+                  Back to My Drive
+                </button>
+              </NoAccess>
+            </div>
           ) : currentView === "trash" ? (
             /* Trash View with Restore, Permanent Delete & 30-Day Auto-Delete Banner */
             <div className="flex-1 space-y-6">
@@ -1218,7 +1284,7 @@ export default function DrivePage() {
                   </p>
                 </div>
 
-                {(folders.length > 0 || documents.length > 0) && (
+                {(folders.length > 0 || documents.length > 0) && roleCan("content.deletePermanent") && (
                   <button
                     onClick={async () => {
                       if (confirm("Are you sure you want to empty the Bin? Items not protected by retention policy will be permanently deleted immediately.")) {
@@ -1307,16 +1373,18 @@ export default function DrivePage() {
                           >
                             <RotateCcw className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handlePermanentDelete("folder", f.id);
-                            }}
-                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Delete permanently"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canDeletePermanent && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePermanentDelete("folder", f.id);
+                              }}
+                              className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Delete permanently"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -1369,16 +1437,18 @@ export default function DrivePage() {
                           >
                             <RotateCcw className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handlePermanentDelete("doc", d.id);
-                            }}
-                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Delete permanently"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canDeletePermanent && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePermanentDelete("doc", d.id);
+                              }}
+                              className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Delete permanently"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -1472,11 +1542,12 @@ export default function DrivePage() {
           )}
         </main>
 
-        {/* Right Info Drawer */}
-        {showDetailPanel && (
+        {/* Right Info Drawer -- suppressed (not closed) while several rows are
+            selected, so dropping back to one selection restores it. */}
+        {showDetailPanel && totalSelected <= 1 && (
           <DriveDetailPanel
-            selectedFolder={selectedFolder}
-            selectedDoc={selectedDoc}
+            selectedFolder={detailFolder}
+            selectedDoc={detailDoc}
             onClose={() => setShowDetailPanel(false)}
           />
         )}
@@ -1517,13 +1588,6 @@ export default function DrivePage() {
       <ConnectorModal
         isOpen={isConnectorModalOpen}
         onClose={() => setIsConnectorModalOpen(false)}
-        onLaunchScanner={() => setIsWebScannerOpen(true)}
-      />
-
-      <WebScannerModal
-        isOpen={isWebScannerOpen}
-        onClose={() => setIsWebScannerOpen(false)}
-        onSuccess={loadContents}
       />
 
       <RenameModal
@@ -1725,7 +1789,8 @@ export default function DrivePage() {
 
               <div className="h-px bg-[#e1e3e1] my-1" />
 
-              {/* Trash / Delete */}
+              {/* Trash / Delete — permanent delete (Bin view) is role-gated */}
+              {(currentView !== "trash" || canDeletePermanent) && (
               <button
                 onClick={async () => {
                   setItemContextMenu(null);
@@ -1762,6 +1827,7 @@ export default function DrivePage() {
                     : "Move to Bin"}
                 </span>
               </button>
+              )}
             </div>
           </>
         );

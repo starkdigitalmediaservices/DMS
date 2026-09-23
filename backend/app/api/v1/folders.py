@@ -6,7 +6,7 @@ import uuid
 from app.deps import get_tenant_db, require_tenant_access, require_role
 from app.schemas.auth import TokenPayload
 from app.schemas.folder import FolderCreate, FolderUpdate, FolderResponse, FolderTreeNode
-from app.services import folder_service, department_service
+from app.services import folder_service
 
 router = APIRouter(prefix="/folders", tags=["Folders"])
 
@@ -41,15 +41,8 @@ async def list_folders(
         is_trashed=is_trashed
     )
 
-    # T50: department-scoped personas only see projects (folders) their
-    # department has been granted — "an RBAC group over projects, not a
-    # container level." Tenant-wide roles (it_admin/auditor/legal_counsel)
-    # are unaffected.
-    if current_user.role in department_service.DEPARTMENT_SCOPED_ROLES:
-        user_id = uuid.UUID(current_user.sub)
-        granted = await department_service.list_user_department_folder_ids(db, tenant_id, user_id)
-        folders = [f for f in folders if f.id in granted]
-
+    # T50 department scope is enforced by RLS (migration 0053), so this
+    # already contains only folders the caller's department was granted.
     return folders
 
 

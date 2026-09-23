@@ -243,3 +243,43 @@ export interface SysConfigItem {
   updated_at: string;
 }
 
+
+// IT-admin user & role management (GET/POST/PATCH /api/v1/users).
+export interface AdminUserDepartment {
+  id: string;
+  name: string;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  created_at: string;
+  departments: AdminUserDepartment[];
+}
+
+// POST /users only — temp_password is shown to the admin once and never stored.
+export interface CreatedAdminUser extends AdminUser {
+  temp_password: string;
+}
+
+export interface DepartmentMember {
+  user_id: string;
+  email: string;
+  full_name: string;
+  role: string;
+}
+
+export interface DepartmentFolderGrant {
+  folder_id: string;
+  name: string;
+}
+
+export interface Department {
+  id: string;
+  name: string;
+  created_at: string;
+  members: DepartmentMember[];
+  folders: DepartmentFolderGrant[];
+}

@@ -22,6 +22,14 @@ class DepartmentFolderGrant(BaseModel):
     folder_id: uuid.UUID
 
 
+@router.get("")
+async def list_departments_api(
+    current_user: TokenPayload = Depends(require_role("it_admin")),
+    db: AsyncSession = Depends(get_tenant_db),
+):
+    return await department_service.list_departments(db, uuid.UUID(current_user.tenant_id))
+
+
 @router.post("")
 async def create_department_api(
     body: DepartmentCreate,
@@ -72,3 +80,27 @@ async def grant_department_folder_api(
     actor_id = uuid.UUID(current_user.sub)
     grant = await department_service.grant_department_folder(db, tenant_id, department_id, body.folder_id, actor_id)
     return {"id": str(grant.id), "department_id": str(department_id), "folder_id": str(body.folder_id)}
+
+
+@router.delete("/{department_id}/members/{user_id}", status_code=204)
+async def remove_department_member_api(
+    department_id: uuid.UUID,
+    user_id: uuid.UUID,
+    current_user: TokenPayload = Depends(require_role("it_admin")),
+    db: AsyncSession = Depends(get_tenant_db),
+):
+    await department_service.remove_department_member(
+        db, uuid.UUID(current_user.tenant_id), department_id, user_id, uuid.UUID(current_user.sub)
+    )
+
+
+@router.delete("/{department_id}/folders/{folder_id}", status_code=204)
+async def revoke_department_folder_api(
+    department_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    current_user: TokenPayload = Depends(require_role("it_admin")),
+    db: AsyncSession = Depends(get_tenant_db),
+):
+    await department_service.revoke_department_folder(
+        db, uuid.UUID(current_user.tenant_id), department_id, folder_id, uuid.UUID(current_user.sub)
+    )

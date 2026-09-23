@@ -24,7 +24,7 @@ import uuid
 import pytest
 from sqlalchemy import delete
 
-from app.database import AppSessionLocal, AsyncSessionLocal
+from app.database import AppSessionLocal, AsyncSessionLocal, set_request_gucs
 from app.models.document import Document
 from app.models.document_version import DocumentVersion
 from app.models.folder import Folder
@@ -80,10 +80,7 @@ async def test_toggle_star_document_survives_commit_then_refresh_under_rls():
 
     try:
         async with AppSessionLocal() as db:
-            from sqlalchemy import text
-            await db.execute(
-                text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": str(tenant_id)}
-            )
+            await set_request_gucs(db, {"app.current_tenant_id": str(tenant_id), "app.dept_scoped": "0"})
             # Before the fix, this raised sqlalchemy.exc.InvalidRequestError
             # ("Could not refresh instance") on the internal db.refresh(doc)
             # that follows toggle_star_document's own db.commit().
@@ -110,18 +107,12 @@ async def test_toggle_star_folder_survives_commit_then_refresh_under_rls():
     folder_id = None
     try:
         async with AppSessionLocal() as db:
-            from sqlalchemy import text
-            await db.execute(
-                text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": str(tenant_id)}
-            )
+            await set_request_gucs(db, {"app.current_tenant_id": str(tenant_id), "app.dept_scoped": "0"})
             created = await folder_service.create_folder(db, tenant_id, user_id, FolderCreate(name="RLS regression"))
             folder_id = created.id
 
         async with AppSessionLocal() as db:
-            from sqlalchemy import text
-            await db.execute(
-                text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": str(tenant_id)}
-            )
+            await set_request_gucs(db, {"app.current_tenant_id": str(tenant_id), "app.dept_scoped": "0"})
             result = await folder_service.toggle_star_folder(db, folder_id, tenant_id, user_id)
             assert result.is_starred is True
     finally:

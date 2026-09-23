@@ -42,11 +42,17 @@ export default function SignUpPage() {
       const res = await api.auth.signUp(fullName, email, password);
       if (res.access_token && res.refresh_token) {
         storeTokens(res.access_token, res.refresh_token);
+        // Populate the cached profile (role included) before entering the
+        // app, so role-gated UI reflects this login, not a stale session.
+        await api.auth.getProfile().catch(() => {});
         router.push("/drive");
       } else {
         // Fallback login
         const loginRes = await api.auth.login(email, password);
         storeTokens(loginRes.access_token, loginRes.refresh_token);
+        // Populate the cached profile (role included) before entering the
+        // app, so role-gated UI reflects this login, not a stale session.
+        await api.auth.getProfile().catch(() => {});
         router.push("/drive");
       }
     } catch (err: any) {

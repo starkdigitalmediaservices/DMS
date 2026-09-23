@@ -19,6 +19,7 @@ import {
   AlertCircle
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { roleLabel } from "@/lib/permissions";
 import { onKeyActivate } from "@/lib/a11y";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -212,7 +213,7 @@ export default function ProfilePage() {
                     <div className="flex items-center gap-3 flex-wrap">
                       <h2 className="text-2xl font-bold text-textMain">{profile.full_name}</h2>
                       <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-primary/10 text-primary border border-primary/20">
-                        {profile.role.replace(/_/g, " ")}
+                        {roleLabel(profile.role)}
                       </span>
                     </div>
 

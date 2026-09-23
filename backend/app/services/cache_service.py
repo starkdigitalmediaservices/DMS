@@ -51,8 +51,11 @@ async def get_redis():
         await init_redis()
     yield _redis_pool
 
-def generate_cache_key(tenant_id: str, query: str, filters: Optional[dict] = None) -> str:
-    raw = f"{tenant_id}:{query}:{json.dumps(filters, sort_keys=True)}"
+def generate_cache_key(tenant_id: str, query: str, filters: Optional[dict] = None, scope: str = "tenant") -> str:
+    """`scope` must identify what the caller is allowed to see: results
+    cached for a tenant-wide role were served to department-scoped users of
+    the same tenant (found live 2026-09-23) until it was part of the key."""
+    raw = f"{tenant_id}:{scope}:{query}:{json.dumps(filters, sort_keys=True)}"
     return f"search:{tenant_id}:{hashlib.sha256(raw.encode()).hexdigest()}"
 
 async def get_cached_search(cache_key: str) -> Optional[SearchResponse]:

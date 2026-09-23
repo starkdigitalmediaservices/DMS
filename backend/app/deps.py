@@ -1,8 +1,10 @@
+import uuid
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import text
-from .database import AsyncSessionLocal, AppSessionLocal, get_db, _reset_session_tenant_context  # noqa: F401 — get_db re-exported; 13 API route files import it from here, not from .database directly
+from .database import AsyncSessionLocal, AppSessionLocal, get_db, set_request_gucs, _reset_session_tenant_context  # noqa: F401 — get_db re-exported; 13 API route files import it from here, not from .database directly
 from .services.auth_service import verify_token
+from .services import department_service
 from .schemas.auth import TokenPayload
 
 bearer_scheme = HTTPBearer()
@@ -17,7 +19,32 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(b
     payload = verify_token(credentials.credentials)
     if payload.type != "access":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
-    return payload
+    live_role = await load_live_role(payload.sub, payload.tenant_id)
+    if live_role is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User no longer exists",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # The role claim is only a snapshot from login; every permission check
+    # below uses the role as it is now, so a demotion takes effect on the
+    # next request instead of whenever the token chain happens to end.
+    return payload.model_copy(update={"role": live_role})
+
+
+async def load_live_role(user_id: str, tenant_id: str) -> str | None:
+    async with AppSessionLocal() as session:
+        try:
+            await session.execute(
+                text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": str(tenant_id)}
+            )
+            res = await session.execute(
+                text("SELECT role::text FROM iam_dg_users WHERE id = CAST(:u AS uuid) AND tenant_id = CAST(:t AS uuid)"),
+                {"u": str(user_id), "t": str(tenant_id)},
+            )
+            return res.scalar_one_or_none()
+        finally:
+            await _reset_session_tenant_context(session)
 
 async def require_tenant_access(current_user: TokenPayload = Depends(get_current_user)) -> TokenPayload:
     if not current_user or not current_user.tenant_id:
@@ -54,9 +81,12 @@ async def get_tenant_db(
     keeps that safe on a pooled connection; see its own docstring."""
     async with AppSessionLocal() as session:
         try:
-            await session.execute(
-                text("SELECT set_config('app.current_tenant_id', :t, false)"),
-                {"t": str(current_user.tenant_id)}
+            await set_request_gucs(session, {"app.current_tenant_id": str(current_user.tenant_id)})
+            # Department scope (migration 0053's RLS policies) -- computed
+            # under tenant context only, then applied for the rest of the
+            # request, including after any mid-request commit.
+            await department_service.apply_request_scope(
+                session, uuid.UUID(current_user.tenant_id), uuid.UUID(current_user.sub), current_user.role
             )
             yield session
             await session.commit()

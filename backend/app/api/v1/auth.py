@@ -16,7 +16,7 @@ from ...models.document_version import DocumentVersion
 from ...models.chunk import Chunk
 from ...models.folder import Folder
 
-from ...deps import get_db, get_tenant_db, get_request_ip, require_tenant_access
+from ...deps import get_db, get_tenant_db, get_request_ip, load_live_role, require_tenant_access
 from ...services.auth_service import (
     verify_password, create_access_token, create_refresh_token, sign_up,
     create_password_reset_token, reset_password_with_token, change_password,
@@ -220,8 +220,14 @@ async def refresh_token(
     user_id = uuid.UUID(payload.sub)
     tenant_id = uuid.UUID(payload.tenant_id)
     
-    acc = create_access_token(user_id, tenant_id, payload.role)
-    ref = create_refresh_token(user_id, tenant_id, payload.role)
+    # The refresh token's role claim is from the original login; re-read it
+    # so a role change (or a removed account) applies at the next refresh.
+    role = await load_live_role(payload.sub, payload.tenant_id)
+    if role is None:
+        raise HTTPException(status_code=401, detail="User no longer exists")
+
+    acc = create_access_token(user_id, tenant_id, role)
+    ref = create_refresh_token(user_id, tenant_id, role)
     
     from ...config import settings
     return TokenResponse(

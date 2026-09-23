@@ -2,7 +2,8 @@
 import React, { useEffect, useState } from "react";
 import { X, FileText, Folder as FolderIcon, Download, Sparkles, HardDrive, Info, MapPin } from "lucide-react";
 import type { Folder, DocumentListItem, DocumentDetailResponse } from "@/types";
-import { api } from "@/lib/api";
+import { api, isAccessError } from "@/lib/api";
+import { NoAccess } from "@/components/common/NoAccess";
 import MetadataRegionViewer from "@/components/drive/MetadataRegionViewerLoader";
 
 interface DriveDetailPanelProps {
@@ -18,6 +19,9 @@ export function DriveDetailPanel({
 }: DriveDetailPanelProps) {
   const [docDetail, setDocDetail] = useState<DocumentDetailResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  // 403/404 on the detail fetch = the document is outside this user's
+  // department scope (or was deleted) — show that, not a stub/crash.
+  const [accessDenied, setAccessDenied] = useState(false);
   const [activeTab, setActiveTab] = useState<"details" | "versions" | "metadata">("details");
   // T05 — which metadata item's source region is open in the viewer modal,
   // by index into docDetail.metadata (index, not key: two items could
@@ -25,6 +29,7 @@ export function DriveDetailPanel({
   const [viewingSourceIdx, setViewingSourceIdx] = useState<number | null>(null);
 
   useEffect(() => {
+    setAccessDenied(false);
     if (selectedDoc) {
       setLoading(true);
       api.documents
@@ -33,6 +38,10 @@ export function DriveDetailPanel({
           setDocDetail(res);
         })
         .catch((err) => {
+          if (isAccessError(err)) {
+            setDocDetail(null);
+            setAccessDenied(true);
+          }
           console.error("Failed to load doc detail:", err);
         })
         .finally(() => setLoading(false));
@@ -125,8 +134,14 @@ export function DriveDetailPanel({
         )}
       </div>
 
+      {accessDenied && (
+        <div className="p-4">
+          <NoAccess compact message="This document isn't available to you — it may be outside your department's folders, or it was removed." />
+        </div>
+      )}
+
       {/* Tabs */}
-      {selectedDoc && (
+      {selectedDoc && !accessDenied && (
         <div className="flex border-b border-[#e1e3e1] text-xs font-medium text-[#444746] bg-white">
           <button
             onClick={() => setActiveTab("details")}
@@ -174,7 +189,7 @@ export function DriveDetailPanel({
           </div>
         )}
 
-        {selectedDoc && activeTab === "details" && (
+        {selectedDoc && !accessDenied && activeTab === "details" && (
           <div className="space-y-3">
             <div>
               <span className="text-[#444746] block mb-1">Type</span>
@@ -197,15 +212,33 @@ export function DriveDetailPanel({
           </div>
         )}
 
-        {selectedDoc && activeTab === "metadata" && (
+        {selectedDoc && !accessDenied && activeTab === "metadata" && (
           <div className="space-y-2">
             {loading ? (
               <div className="text-[#444746] text-center py-6">Loading AI metadata...</div>
             ) : docDetail?.metadata && Array.isArray(docDetail.metadata) && docDetail.metadata.length > 0 ? (
               docDetail.metadata.map((item: any, idx: number) => {
-                const keyStr = typeof item === "string" ? "Metadata" : String(item?.key || item?.name || "Key");
+                const rawKey = typeof item === "string" ? "Metadata" : String(item?.key || item?.name || "Key");
+                // "document_type" -> "Document Type". The CSS `capitalize`
+                // alone only touched the first letter, so snake_case keys
+                // reached the panel as "Document_type".
+                const keyStr = rawKey.replace(/[_-]+/g, " ").trim();
                 const rawVal = typeof item === "string" ? item : (item?.value ?? item?.content ?? "");
-                const valStr = typeof rawVal === "object" ? JSON.stringify(rawVal) : String(rawVal);
+                // Extraction stores scalars wrapped as {"v": ...} (the same
+                // envelope facts use). JSON.stringify on that leaked the raw
+                // wrapper into the panel -- users saw {"v":"30 December 2004"}
+                // instead of the date, and key_topics as a ["a","b"] literal.
+                const unwrapped =
+                  rawVal && typeof rawVal === "object" && !Array.isArray(rawVal) && "v" in rawVal
+                    ? (rawVal as any).v
+                    : rawVal;
+                const listVal = Array.isArray(unwrapped) ? unwrapped : null;
+                const valStr =
+                  unwrapped === null || unwrapped === undefined
+                    ? ""
+                    : typeof unwrapped === "object"
+                    ? JSON.stringify(unwrapped, null, 2)
+                    : String(unwrapped);
                 const score = typeof item?.confidence_score === "number" ? Math.round(item.confidence_score * 100) : 95;
                 const hasRegion = Array.isArray(item?.regions) && item.regions.length > 0 && !!docDetail?.current_version?.download_url;
 
@@ -218,7 +251,22 @@ export function DriveDetailPanel({
                         {score}%
                       </span>
                     </div>
-                    <p className="text-[#1f1f1f] font-medium break-words text-xs">{valStr}</p>
+                    {listVal ? (
+                      <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        {listVal.map((entry: any, i: number) => (
+                          <span
+                            key={i}
+                            className="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#0d2e5c] text-[11px] font-medium border border-[#d2e3fc]"
+                          >
+                            {typeof entry === "object" ? JSON.stringify(entry) : String(entry)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[#1f1f1f] font-medium break-words text-xs whitespace-pre-line leading-relaxed">
+                        {valStr}
+                      </p>
+                    )}
                     {hasRegion && (
                       <button
                         onClick={() => setViewingSourceIdx(idx)}
@@ -240,7 +288,7 @@ export function DriveDetailPanel({
           </div>
         )}
 
-        {selectedDoc && activeTab === "versions" && (
+        {selectedDoc && !accessDenied && activeTab === "versions" && (
           <div className="space-y-2">
             {loading ? (
               <div className="text-[#444746] text-center py-6">Loading versions...</div>

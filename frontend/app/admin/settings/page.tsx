@@ -13,7 +13,7 @@ import {
   Clock,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { getUserProfile } from "@/lib/auth";
+import { useRole } from "@/lib/permissions";
 import type { SysConfigItem } from "@/types";
 
 function formatUpdatedAt(iso: string): string {
@@ -33,13 +33,10 @@ export default function SettingsAdminPage() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
 
-  // Same hydration-mismatch fix as the templates admin page: localStorage
-  // doesn't exist during Next.js's server render, so this has to be read
-  // after mount, not computed directly in the render body.
-  const [isAdmin, setIsAdmin] = useState(false);
-  useEffect(() => {
-    setIsAdmin(getUserProfile()?.role === "it_admin");
-  }, []);
+  // useRole() reads the cached profile after mount (not during render —
+  // that caused a real hydration mismatch here, React #418/#423).
+  const { can: roleCan, ready: roleReady } = useRole();
+  const isAdmin = roleCan("config.manage");
 
   const fetchConfig = async () => {
     setLoading(true);
@@ -54,9 +51,13 @@ export default function SettingsAdminPage() {
     }
   };
 
+  // GET /admin/config is it_admin-only server-side too, so don't fire a
+  // request that can only come back 403 for any other role.
   useEffect(() => {
-    fetchConfig();
-  }, []);
+    if (!roleReady) return;
+    if (isAdmin) fetchConfig();
+    else setLoading(false);
+  }, [roleReady, isAdmin]);
 
   const startEdit = (row: SysConfigItem) => {
     setEditingKey(row.key);
@@ -119,12 +120,11 @@ export default function SettingsAdminPage() {
           default for deployments that haven&apos;t set it) — this screen only edits ones that already exist.
         </p>
 
-        {!isAdmin && (
+        {roleReady && !isAdmin && (
           <div className="glass rounded-xl p-4 flex items-center gap-3 text-amber-700 bg-amber-50 border border-amber-200">
             <ShieldAlert className="w-5 h-5 shrink-0" />
             <p className="text-sm">
-              You can view current settings, but changing them requires the{" "}
-              <span className="font-mono text-xs">it_admin</span> role.
+              Viewing and changing these settings requires the IT Admin role.
             </p>
           </div>
         )}
@@ -136,7 +136,7 @@ export default function SettingsAdminPage() {
           </div>
         )}
 
-        {loading ? (
+        {!isAdmin ? null : loading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
             <Loader2 className="w-8 h-8 text-[#0d2e5c] animate-spin" />
             <p className="text-sm text-[#444746]">Loading settings...</p>

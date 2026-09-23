@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from fastapi import HTTPException, status
 from uuid import UUID
 from datetime import datetime
@@ -10,6 +10,7 @@ from app.models.folder import Folder
 from app.models.document import Document
 from app.schemas.folder import FolderCreate, FolderUpdate, FolderResponse, FolderTreeNode
 from app.services.audit_service import log_action
+from app.services import department_service
 
 
 async def create_folder(
@@ -22,6 +23,13 @@ async def create_folder(
         parent = await db.get(Folder, folder_in.parent_id)
         if not parent or parent.tenant_id != tenant_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parent folder not found")
+    elif department_service.request_scope_folder_ids(db) is not None:
+        # RLS would reject the insert anyway (a root folder is outside any
+        # department's grant); say why instead of surfacing a policy error.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Department-scoped users can only create folders inside their department's projects",
+        )
 
     folder = Folder(
         name=folder_in.name,
@@ -55,7 +63,14 @@ async def list_folders(
     elif not include_root and parent_id is not None:
         stmt = stmt.where(Folder.parent_id == parent_id)
     elif not include_root and parent_id is None and is_starred is None and not is_trashed:
-        stmt = stmt.where(Folder.parent_id.is_(None))
+        scope = department_service.request_scope_folder_ids(db)
+        if scope is None:
+            stmt = stmt.where(Folder.parent_id.is_(None))
+        else:
+            # A department can be granted a folder at any depth; for its
+            # members that folder is a top-level entry, since they can't
+            # see (or navigate through) the parent it sits under.
+            stmt = stmt.where(or_(Folder.parent_id.is_(None), Folder.parent_id.notin_(scope)))
 
     stmt = stmt.order_by(Folder.name.asc())
     res = await db.execute(stmt)

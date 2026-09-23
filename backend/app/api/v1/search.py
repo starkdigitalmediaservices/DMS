@@ -6,14 +6,14 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import text
 
-from ...database import AppSessionLocal
+from ...database import AppSessionLocal, set_request_gucs
 from ...deps import (
     get_tenant_db, require_tenant_access, get_request_ip,
     _reset_session_tenant_context,
 )
 from ...schemas.auth import TokenPayload
+from ...services import department_service
 from ...schemas.search import SearchRequest, SearchResponse
 from ...services.search_service import search as do_search
 
@@ -90,12 +90,11 @@ async def search_stream(
         # time any of this executes — every write then fails RLS (confirmed:
         # the audit insert for search.query was rejected outright). The
         # stream therefore owns its session for its whole lifetime, set up
-        # exactly as get_tenant_db does.
+        # exactly as get_tenant_db does -- department scope included, or the
+        # fail-closed policies from migration 0053 would hide every document.
         async with AppSessionLocal() as db:
-            await db.execute(
-                text("SELECT set_config('app.current_tenant_id', :t, false)"),
-                {"t": str(tenant_id)},
-            )
+            await set_request_gucs(db, {"app.current_tenant_id": str(tenant_id)})
+            await department_service.apply_request_scope(db, tenant_id, user_id, current_user.role)
             try:
                 async for chunk in _run(db):
                     yield chunk

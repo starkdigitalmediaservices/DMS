@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.services import department_service
 from app.services.connector_ingest_service import (
     already_ingested,
     get_connector_actor,
@@ -116,9 +117,9 @@ async def receive_email_webhook(
     # AppSessionLocal connection. Session-scoped (false) so it survives
     # ingest_bytes()/upload_document()'s own mid-request db.commit() —
     # database.py's get_db() resets it centrally on the way out.
-    await db.execute(
-        text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": str(tenant_id)}
-    )
+    # The connector is a system actor, not a department member, so it gets
+    # explicit tenant-wide scope (migration 0053's policies fail closed).
+    await department_service.set_tenant_wide_scope(db, tenant_id)
     ingested_count = 0
     skipped_count = 0
     ingested_details: List[IngestedAttachmentDetail] = []

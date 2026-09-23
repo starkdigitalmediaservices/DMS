@@ -210,7 +210,9 @@ async def toggle_trash_document_api(
 @router.post('/trash/cleanup')
 async def cleanup_trashed_items_api(
     retention_days: int = 30,
-    current_user: TokenPayload = Depends(require_tenant_access),
+    # Emptying the bin is a permanent delete, so it takes the same roles
+    # as DELETE /documents/{id}; it was open to every role until 2026-09-23.
+    current_user: TokenPayload = Depends(require_role('records_officer', 'department_head', 'it_admin')),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     # A single tenant's "Empty Bin" must never touch another tenant's

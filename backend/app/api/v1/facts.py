@@ -42,7 +42,7 @@ async def bulk_confirm_facts_api(
     corpus_folder_id: uuid.UUID,
     threshold: float,
     policy_version: str,
-    current_user: TokenPayload = Depends(require_role('admin', 'records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -60,7 +60,7 @@ async def bulk_confirm_facts_api(
 @router.post("/bulk-edit")
 async def bulk_edit_facts_api(
     body: BulkEditRequest,
-    current_user: TokenPayload = Depends(require_role('admin', 'records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -74,7 +74,7 @@ async def bulk_edit_facts_api(
 @router.post("/bulk-edit/revert/{batch_id}")
 async def revert_bulk_edit_batch_api(
     batch_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('admin', 'records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -95,7 +95,7 @@ async def get_fact_api(
 @router.post("/{fact_id}/claim")
 async def claim_fact_api(
     fact_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('admin', 'records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -107,7 +107,7 @@ async def claim_fact_api(
 @router.post("/{fact_id}/release")
 async def release_fact_api(
     fact_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('admin', 'records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -119,7 +119,7 @@ async def release_fact_api(
 @router.post("/{fact_id}/mark-handwritten")
 async def mark_fact_handwritten_api(
     fact_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('admin', 'records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -144,7 +144,7 @@ async def resolve_stitch_ambiguity_api(
 @router.post("/{fact_id}/confirm")
 async def confirm_fact_api(
     fact_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('admin', 'records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)

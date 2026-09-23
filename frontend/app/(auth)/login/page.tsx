@@ -28,6 +28,9 @@ export default function LoginPage() {
     try {
       const res = await api.auth.login(email, password);
       storeTokens(res.access_token, res.refresh_token);
+      // Populate the cached profile (role included) before entering the
+      // app, so role-gated UI reflects this login, not a stale session.
+      await api.auth.getProfile().catch(() => {});
       router.push("/drive");
     } catch (err: any) {
       setError(err.message || "Invalid credentials");

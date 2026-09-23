@@ -30,6 +30,7 @@ import { Button } from "@/components/ui/Button";
 import RegionHighlightViewer from "@/components/drive/RegionHighlightViewer";
 import type { FolderTreeNode } from "@/types";
 import { useI18n } from "@/lib/i18n";
+import { useRole } from "@/lib/permissions";
 
 function flattenFolders(nodes: FolderTreeNode[], depth = 0): { id: string; name: string; depth: number }[] {
   const out: { id: string; name: string; depth: number }[] = [];
@@ -80,6 +81,12 @@ function confidenceBadge(confidence: number | null): { text: string; className: 
 
 export default function WorkbenchPage() {
   const { t } = useI18n();
+  // Everyone can read the queues; only reviewer roles can act on them
+  // (claim/release/confirm/bulk-edit/bulk-confirm/mark-handwritten/
+  // resolve-stitch, plus corpus calibration) — the rest get a read-only view.
+  const { can: roleCan, ready: roleReady } = useRole();
+  const canReview = roleCan("facts.review");
+  const canCalibrate = roleCan("corpus.calibrate");
   const [category, setCategory] = useState<Category>("low_confidence");
   const [facts, setFacts] = useState<QueueFact[]>([]);
   const [total, setTotal] = useState(0);
@@ -339,7 +346,7 @@ export default function WorkbenchPage() {
   const selected = facts[selectedIndex] || null;
 
   const doAction = async (action: "claim" | "release" | "confirm" | "mark_handwritten") => {
-    if (!selected) return;
+    if (!selected || !canReview) return;
     setActionLoading(true);
     setError("");
     setNotice("");
@@ -368,7 +375,7 @@ export default function WorkbenchPage() {
   // leaving the underlying ambiguity to resurface unresolved on every
   // future document sharing this page shape.
   const resolveAmbiguity = async (relation: "vertical" | "horizontal" | "unrelated") => {
-    if (!selected) return;
+    if (!selected || !canReview) return;
     setActionLoading(true);
     setError("");
     setNotice("");
@@ -399,6 +406,9 @@ export default function WorkbenchPage() {
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
+      } else if (!canReview) {
+        // Read-only roles: navigation only, no review shortcuts.
+        return;
       } else if (e.key === "c" || e.key === "C") {
         doAction("claim");
       } else if (e.key === "r" || e.key === "R") {
@@ -417,7 +427,7 @@ export default function WorkbenchPage() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [facts, selectedIndex, category]);
+  }, [facts, selectedIndex, category, canReview]);
 
   const submitBulkConfirm = async () => {
     if (!bulkFolderId.trim() || !bulkPolicyVersion.trim()) {
@@ -461,7 +471,7 @@ export default function WorkbenchPage() {
             space and pushed the header into two lines. */}
         <div className="hidden lg:flex items-center gap-1.5 text-xs text-[#5f6368] shrink-0">
           <Keyboard className="w-4 h-4" />
-          <span>&uarr;/&darr; navigate &middot; C claim &middot; R release &middot; Enter/A confirm &middot; H mark handwritten</span>
+          <span>{canReview ? <>&uarr;/&darr; navigate &middot; C claim &middot; R release &middot; Enter/A confirm &middot; H mark handwritten</> : <>&uarr;/&darr; navigate</>}</span>
         </div>
       </header>
 
@@ -504,6 +514,12 @@ export default function WorkbenchPage() {
             {categoryTabs.find((t) => t.key === category)?.description}
           </p>
 
+          {roleReady && !canReview && (
+            <div role="status" className="mb-4 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800">
+              <ShieldAlert className="w-4 h-4 shrink-0" aria-hidden="true" />
+              {t("rbac.read_only_notice", "Your role can view this queue but not review, confirm, or edit facts.")}
+            </div>
+          )}
           {error && (
             <div role="alert" aria-live="assertive" className="mb-4 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
               <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
@@ -522,7 +538,7 @@ export default function WorkbenchPage() {
               <span className="text-sm font-semibold text-[#1f1f1f]">Queue &mdash; {total} item{total === 1 ? "" : "s"}</span>
               {loading && <Loader2 className="w-4 h-4 animate-spin text-[#0d2e5c]" aria-label="Loading queue items" />}
             </div>
-            {facts.length > 0 && (
+            {facts.length > 0 && canReview && (
               <div className="px-5 py-1.5 bg-[#fafbfc] border-b border-[#e1e3e1] text-[10px] text-[#444746] flex items-center gap-4">
                 <span>&#9744; check a row to include it in <b>Bulk edit</b>, below</span>
                 <span>Click a row to review it, right</span>
@@ -550,6 +566,7 @@ export default function WorkbenchPage() {
                     {/* Padded wrapper, not the input, so the visible
                         checkbox stays compact while the tap target is
                         still finger-sized on tablet/mobile. */}
+                    {canReview && (
                     <span className="shrink-0 -m-2 p-2">
                       <input
                         type="checkbox"
@@ -561,6 +578,7 @@ export default function WorkbenchPage() {
                         title="Include in Bulk edit"
                       />
                     </span>
+                    )}
                     <button
                       onClick={() => selectFact(idx)}
                       aria-label={`Review ${fieldLabel(fact.field_name)}, value ${formatValue(fact.value)}, confidence ${fact.confidence !== null ? (fact.confidence * 100).toFixed(0) + '%' : 'unrated'}`}
@@ -651,6 +669,7 @@ export default function WorkbenchPage() {
                     <Eye className="w-3.5 h-3.5 mr-1.5" />
                     {t("workbench.btn.view_source", "View Source")}
                   </Button>
+                  {canReview && (<>
                   <Button
                     size="sm" className="max-lg:h-11 max-lg:px-4" variant="secondary" loading={actionLoading}
                     onClick={() => doAction(selected.claimed_by_actor_id ? "release" : "claim")}
@@ -703,11 +722,13 @@ export default function WorkbenchPage() {
                       )}
                     </>
                   )}
+                  </>)}
                 </div>
               </div>
             )}
           </Card>
 
+          {canReview && (<>
           <Card className="bg-white border-2 border-emerald-200 relative overflow-hidden">
             <div className="absolute top-0 left-0 w-1 h-full bg-emerald-400" />
             <h2 className="text-sm font-bold text-[#1f1f1f] mb-1 flex items-center gap-1.5">
@@ -773,6 +794,7 @@ export default function WorkbenchPage() {
                       <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
                       Not calibrated — Confirm Folder will be refused until a human certifies this corpus.
                     </span>
+                    {canCalibrate && (
                     <button
                       onClick={calibrateThisFolder}
                       disabled={calibrateActionLoading}
@@ -780,6 +802,7 @@ export default function WorkbenchPage() {
                     >
                       {calibrateActionLoading ? "Calibrating…" : "Calibrate now"}
                     </button>
+                    )}
                   </div>
                 )
               )}
@@ -886,6 +909,7 @@ export default function WorkbenchPage() {
               </div>
             )}
           </Card>
+          </>)}
         </div>
       </main>
 

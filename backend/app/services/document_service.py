@@ -24,6 +24,7 @@ from ..schemas.document import (
 )
 from ..services.storage_service import upload_file, generate_presigned_url, delete_file, download_file, archive_file_with_retention
 from ..services.audit_service import log_action
+from ..services import department_service
 from ..services.license_service import check_upload_allowed
 from ..pipeline.ingestion import ingest_document
 
@@ -392,6 +393,14 @@ async def update_document(
             folder = await db.get(Folder, doc_in.folder_id)
             if not folder or folder.tenant_id != tenant_id:
                 raise HTTPException(status_code=404, detail="Target folder not found")
+        elif department_service.request_scope_folder_ids(db) is not None and doc.created_by != actor_id:
+            # Department scope only follows a root-level document back to
+            # whoever uploaded it, so this move would take it out of view
+            # for the caller's whole department -- RLS rejects it; explain.
+            raise HTTPException(
+                status_code=403,
+                detail="Department-scoped users can only move documents they uploaded to the root",
+            )
         doc.folder_id = doc_in.folder_id
         changes["folder_id"] = str(doc_in.folder_id) if doc_in.folder_id else None
 

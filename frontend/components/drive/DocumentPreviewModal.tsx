@@ -30,8 +30,12 @@ import {
   Loader2,
 } from "lucide-react";
 import { MarkdownViewer } from "../chat/MarkdownViewer";
-import type { DocumentListItem, DocumentFactsResponse, DocumentTableViewResponse } from "@/types";
-import { api } from "@/lib/api";
+import { CitationModal, type CitationModalCitation } from "../search/CitationModal";
+import type { DocumentListItem, DocumentFactsResponse, DocumentTableViewResponse, SearchResult } from "@/types";
+import { api, isAccessError } from "@/lib/api";
+import { useRole } from "@/lib/permissions";
+
+const NO_ACCESS_MSG = "You don't have access to this document.";
 
 interface DocumentPreviewModalProps {
   isOpen: boolean;
@@ -45,6 +49,10 @@ interface ChatMessage {
   sender: "user" | "ai";
   text: string;
   timestamp: string;
+  /** T71 -- the search hits this reply was grounded on, in the same order the
+   *  model's [N] markers refer to. Held per-message so a [1] stays pointing at
+   *  the right source after later replies arrive. */
+  results?: SearchResult[] | null;
 }
 
 interface ExcelSheetData {
@@ -69,6 +77,19 @@ export function DocumentPreviewModal({
   // In-Document AI Chat State
   const [showChat, setShowChat] = useState(true);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  // T71 -- same [N] click-through RightSideChatDrawer/PersistentChatPanel use.
+  // This panel fetched the sources all along and threw them away, so its
+  // citations rendered as inert "[1]" text while every other surface's were
+  // clickable.
+  const [activeCitation, setActiveCitation] = useState<CitationModalCitation | null>(null);
+  const citationsForMessage = (m: ChatMessage): CitationModalCitation[] =>
+    (m.results || []).map((r, idx) => ({
+      number: idx + 1,
+      document_name: r.document_name,
+      page_number: r.page_number,
+      download_url: r.download_url,
+      fact_id: null,
+    }));
   const [chatInput, setChatInput] = useState("");
   const [aiThinking, setAiThinking] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
@@ -80,6 +101,9 @@ export function DocumentPreviewModal({
   // preview looked identical whether extraction ran, stitched something,
   // or never even classified.
   const [showFacts, setShowFacts] = useState(false);
+  // Edit/Confirm on extracted facts is fact review — reviewer roles only.
+  const { can: roleCan } = useRole();
+  const canReviewFacts = roleCan("facts.review");
   const [factsData, setFactsData] = useState<DocumentFactsResponse | null>(null);
   const [factsLoading, setFactsLoading] = useState(false);
   const [factsError, setFactsError] = useState<string | null>(null);
@@ -184,14 +208,14 @@ export function DocumentPreviewModal({
       api.documents
         .getFacts(doc.id)
         .then((data) => setFactsData(data))
-        .catch((e) => setFactsError(e?.message || "Failed to load extracted facts"))
+        .catch((e) => setFactsError(isAccessError(e) ? NO_ACCESS_MSG : e?.message || "Failed to load extracted facts"))
         .finally(() => setFactsLoading(false));
 
       setTableLoading(true);
       api.documents
         .getTableView(doc.id)
         .then((data) => setTableData(data))
-        .catch((e) => setTableError(e?.message || "Failed to load the reconstructed table"))
+        .catch((e) => setTableError(isAccessError(e) ? NO_ACCESS_MSG : e?.message || "Failed to load the reconstructed table"))
         .finally(() => setTableLoading(false));
     }
 
@@ -358,7 +382,22 @@ export function DocumentPreviewModal({
         searchRes.ai_summary.includes("AI summary generation is disabled");
 
       let aiResponseText = "";
-      if (searchRes && searchRes.ai_summary && !summaryUnavailable) {
+      // Real bug found live 2026-09-22: `refused` was folded into
+      // summaryUnavailable above, so a deliberate, correct refusal ("The
+      // document does not contain information that answers this question")
+      // was treated exactly like a broken LLM call and fell through to the
+      // top-snippet branch below -- which prints raw retrieved text under a
+      // "Based strictly on <doc>" heading, with no citation and no page. The
+      // reranker normalises every hit to score 1.0, so results.length > 0 is
+      // true for ANY query: asking this panel something the document cannot
+      // answer produced confident-looking boilerplate on every single refusal,
+      // not just edge cases. A refusal is an answer -- show it, don't override
+      // it with retrieval output the backend already judged ungrounded.
+      if (searchRes?.refused) {
+        aiResponseText =
+          searchRes.ai_summary ||
+          `I couldn't find an answer for that in **${doc.title}**.`;
+      } else if (searchRes && searchRes.ai_summary && !summaryUnavailable) {
         aiResponseText = searchRes.ai_summary;
       } else if (searchRes && searchRes.results && searchRes.results.length > 0) {
         const topSnippet = searchRes.results[0].snippet;
@@ -378,6 +417,11 @@ export function DocumentPreviewModal({
         sender: "ai",
         text: aiResponseText,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        // Only the grounded-summary branch produces [N] markers; the snippet
+        // and refusal branches have nothing to cite, so they carry no sources
+        // and their text renders with markers left inert (MarkdownViewer's
+        // documented default when onCitationClick is absent).
+        results: !summaryUnavailable && !searchRes?.refused ? searchRes?.results ?? null : null,
       };
 
       setChatMessages((prev) => [...prev, aiMsg]);
@@ -1016,7 +1060,17 @@ export function DocumentPreviewModal({
                       <p className="whitespace-pre-wrap leading-relaxed break-words [word-break:break-word]">{msg.text}</p>
                     ) : (
                       <div className="leading-relaxed text-[#1f1f1f] break-words [word-break:break-word] overflow-x-auto">
-                        <MarkdownViewer content={msg.text} />
+                        <MarkdownViewer
+                          content={msg.text}
+                          onCitationClick={
+                            msg.results && msg.results.length > 0
+                              ? (n) =>
+                                  setActiveCitation(
+                                    citationsForMessage(msg).find((c) => c.number === n) ?? null
+                                  )
+                              : undefined
+                          }
+                        />
                       </div>
                     )}
                     <span className={`text-[9px] block text-right mt-1 ${msg.sender === "user" ? "text-blue-100" : "text-[#747775]"}`}>
@@ -1321,7 +1375,7 @@ export function DocumentPreviewModal({
                             {f.confidence !== null && (
                               <p className="text-[10px] text-[#747775] mt-1">confidence: {(f.confidence * 100).toFixed(0)}%</p>
                             )}
-                            {!isSentinel && (
+                            {!isSentinel && canReviewFacts && (
                               <div className="flex items-center gap-1.5 mt-2">
                                 <button
                                   onClick={() => startEditFact(f.fact_id, f.value)}
@@ -1355,6 +1409,8 @@ export function DocumentPreviewModal({
           </aside>
         )}
       </div>
+
+      <CitationModal citation={activeCitation} onClose={() => setActiveCitation(null)} />
     </div>
   );
 }

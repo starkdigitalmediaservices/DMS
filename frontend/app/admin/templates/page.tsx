@@ -13,7 +13,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { getUserProfile } from "@/lib/auth";
+import { useRole } from "@/lib/permissions";
 import { Button } from "@/components/ui/Button";
 import type { TemplateResponse, TemplateFieldDef, TemplateCreatePayload } from "@/types";
 
@@ -53,17 +53,10 @@ export default function TemplatesAdminPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
-  // Read after mount, not during render: getUserProfile() reads
-  // localStorage, which doesn't exist during Next.js's server render, so
-  // computing isAdmin directly in the render body produced a real
-  // hydration mismatch (server always rendered the non-admin view, then
-  // the client immediately rendered the admin view) -- React errors
-  // #418/#423, confirmed live via a real it_admin signup opening this
-  // page.
-  const [isAdmin, setIsAdmin] = useState(false);
-  useEffect(() => {
-    setIsAdmin(getUserProfile()?.role === "it_admin");
-  }, []);
+  // useRole() reads the cached profile after mount (not during render —
+  // that caused a real hydration mismatch here, React #418/#423).
+  const { can: roleCan, ready: roleReady } = useRole();
+  const isAdmin = roleCan("templates.manage");
 
   const fetchTemplates = async () => {
     setLoading(true);
@@ -203,12 +196,11 @@ export default function TemplatesAdminPage() {
           structured extraction or table stitching runs on it.
         </p>
 
-        {!isAdmin && (
+        {roleReady && !isAdmin && (
           <div className="glass rounded-xl p-4 flex items-center gap-3 text-amber-700 bg-amber-50 border border-amber-200">
             <ShieldAlert className="w-5 h-5 shrink-0" />
             <p className="text-sm">
-              You can view registered templates, but creating, editing, or deleting them requires the{" "}
-              <span className="font-mono text-xs">it_admin</span> role.
+              You can view registered templates, but creating, editing, or deleting them requires the IT Admin role.
             </p>
           </div>
         )}

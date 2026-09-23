@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import time
 import re
 import logging
@@ -13,6 +14,7 @@ from app.services.cache_service import (
     get_cached_embeddings, cache_embeddings,
 )
 from app.services.audit_service import log_action
+from app.services import department_service
 from app.services.storage_service import generate_presigned_url
 import json
 from app.ai.factory import get_embed_provider, get_rerank_provider, get_llm_provider
@@ -554,7 +556,13 @@ async def search(
 
     query = scrubbed_query
     
-    cache_key = generate_cache_key(str(tenant_id), query, filters)
+    # Scoped users see different documents (department grants + their own
+    # root uploads), so they can't share a cache entry with anyone else.
+    scope_folders = department_service.request_scope_folder_ids(db)
+    scope = "tenant" if scope_folders is None else "user:{}:{}".format(
+        user_id, hashlib.sha256(",".join(sorted(map(str, scope_folders))).encode()).hexdigest()
+    )
+    cache_key = generate_cache_key(str(tenant_id), query, filters, scope=scope)
     cached = await get_cached_search(cache_key)
     if cached:
         return cached

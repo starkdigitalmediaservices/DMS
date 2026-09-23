@@ -1,8 +1,8 @@
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import text
+from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy import event, text
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -57,9 +57,49 @@ else:
     )
     app_engine = engine
 
+class _AppSession(Session):
+    """Sync session class behind AppSessionLocal; exists so the
+    after_begin listener below only ever touches request connections."""
+
+
+# Postgres settings a request's RLS policies read (tenant, caller, and
+# department scope -- see deps.get_tenant_db). set_config(..., false) lives
+# on the physical connection, and a mid-request db.commit() can hand the
+# session a different pooled connection that has none of them (the T96
+# "Could not refresh instance" bug establish_tenant_context works around
+# call site by call site). Keeping the values on the session and replaying
+# them whenever a transaction begins makes every connection the session
+# touches carry the same context, which matters more now that losing
+# app.dept_scoped would silently widen what a scoped user can see.
+REQUEST_GUCS_KEY = "request_gucs"
+
+
+def _set_config_statement(gucs: dict):
+    items = list(gucs.items())
+    sql = "SELECT " + ", ".join(f"set_config(:n{i}, :v{i}, false)" for i in range(len(items)))
+    params = {}
+    for i, (name, value) in enumerate(items):
+        params[f"n{i}"], params[f"v{i}"] = name, value
+    return text(sql), params
+
+
+@event.listens_for(_AppSession, "after_begin")
+def _replay_request_gucs(session, transaction, connection):
+    gucs = session.info.get(REQUEST_GUCS_KEY)
+    if gucs:
+        connection.execute(*_set_config_statement(gucs))
+
+
+async def set_request_gucs(session: AsyncSession, gucs: dict) -> None:
+    """Apply these settings now and on every later transaction of this session."""
+    session.info.setdefault(REQUEST_GUCS_KEY, {}).update(gucs)
+    await session.execute(*_set_config_statement(gucs))
+
+
 AppSessionLocal = async_sessionmaker(
     app_engine,
     class_=AsyncSession,
+    sync_session_class=_AppSession,
     expire_on_commit=False,
     autocommit=False,
     autoflush=False,
@@ -114,10 +154,14 @@ async def _reset_session_tenant_context(session: AsyncSession) -> None:
     path calls this, regardless of whether this particular request ever
     set anything, so cleanup is centralized instead of dependent on every
     caller remembering to."""
+    session.info.pop(REQUEST_GUCS_KEY, None)
     try:
         await session.execute(text(
             "SELECT set_config('app.current_tenant_id', '', false), "
-            "set_config('app.login_lookup_email', '', false)"
+            "set_config('app.login_lookup_email', '', false), "
+            "set_config('app.current_user_id', '', false), "
+            "set_config('app.dept_scoped', '', false), "
+            "set_config('app.scope_folder_ids', '', false)"
         ))
         await session.commit()
     except Exception:

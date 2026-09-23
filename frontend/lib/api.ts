@@ -1,6 +1,28 @@
 import { getAccessToken, getUserProfile, setUserProfile, clearTokens } from "./auth";
 import { offlineStore } from "./offlineStore";
-import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, SearchResult, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem } from "@/types";
+import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, SearchResult, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem, AdminUser, CreatedAdminUser, Department } from "@/types";
+
+// An HTTP error response from the backend (as opposed to a network-level
+// failure, which is a plain Error). Carries the status so callers can tell
+// "you don't have access" (403/404) apart from "offline" — the offline
+// fallbacks below must only kick in for the latter, or a 403 on a folder
+// outside the user's department silently rendered cached/stub data.
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/** True for a 403/404 from the server — the resource exists but isn't
+ *  visible to this user, or doesn't exist at all (the server returns 404
+ *  for out-of-scope rows under RLS). */
+export const isAccessError = (err: unknown): boolean =>
+  err instanceof ApiError && (err.status === 403 || err.status === 404);
+
+const isHttpError = (err: unknown): boolean => err instanceof ApiError;
 
 export const getBaseUrl = (): string => {
   if (typeof window !== "undefined") {
@@ -201,7 +223,7 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
         errorDetail = await response.text();
       } catch (__) {}
     }
-    throw new Error(errorDetail);
+    throw new ApiError(errorDetail, response.status);
   }
   
   if (response.status === 204) {
@@ -553,6 +575,7 @@ export const api = {
       try {
         return await request(`/api/v1/folders?${q.toString()}`);
       } catch (e) {
+        if (isHttpError(e)) throw e;
         const tree = offlineStore.getFolderTree();
         return (tree || []).map((t) => ({
           id: t.id,
@@ -570,6 +593,7 @@ export const api = {
       try {
         return await request(`/api/v1/folders/${folderId}`);
       } catch (e) {
+        if (isHttpError(e)) throw e;
         const tree = offlineStore.getFolderTree();
         const found = tree?.find((t) => t.id === folderId);
         return {
@@ -645,6 +669,7 @@ export const api = {
       try {
         return await request(`/api/v1/documents?${q.toString()}`);
       } catch (e) {
+        if (isHttpError(e)) throw e;
         return offlineStore.getDocuments(params?.folder_id);
       }
     },
@@ -652,6 +677,7 @@ export const api = {
       try {
         return await request(`/api/v1/documents/${documentId}`);
       } catch (e) {
+        if (isHttpError(e)) throw e;
         return (
           offlineStore.getDocumentDetail(documentId) || {
             document_id: documentId,
@@ -723,6 +749,57 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify({ value }),
       });
+    },
+  },
+  // IT-admin user & role management. Server enforces it_admin on all of these.
+  users: {
+    list: async (): Promise<AdminUser[]> => {
+      return await request("/api/v1/users", { method: "GET" });
+    },
+    // Response carries a one-time temp_password — never persisted client-side.
+    create: async (body: { email: string; full_name: string; role: string }): Promise<CreatedAdminUser> => {
+      return await request("/api/v1/users", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    update: async (userId: string, body: { role?: string; full_name?: string }): Promise<AdminUser> => {
+      return await request(`/api/v1/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+  },
+  departments: {
+    list: async (): Promise<Department[]> => {
+      return await request("/api/v1/departments", { method: "GET" });
+    },
+    create: async (name: string): Promise<{ id: string; name: string }> => {
+      return await request("/api/v1/departments", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+    },
+    delete: async (departmentId: string): Promise<null> => {
+      return await request(`/api/v1/departments/${departmentId}`, { method: "DELETE" });
+    },
+    addMember: async (departmentId: string, userId: string): Promise<any> => {
+      return await request(`/api/v1/departments/${departmentId}/members`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: userId }),
+      });
+    },
+    removeMember: async (departmentId: string, userId: string): Promise<null> => {
+      return await request(`/api/v1/departments/${departmentId}/members/${userId}`, { method: "DELETE" });
+    },
+    grantFolder: async (departmentId: string, folderId: string): Promise<any> => {
+      return await request(`/api/v1/departments/${departmentId}/folders`, {
+        method: "POST",
+        body: JSON.stringify({ folder_id: folderId }),
+      });
+    },
+    revokeFolder: async (departmentId: string, folderId: string): Promise<null> => {
+      return await request(`/api/v1/departments/${departmentId}/folders/${folderId}`, { method: "DELETE" });
     },
   },
   templates: {

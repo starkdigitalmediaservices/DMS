@@ -14,6 +14,8 @@ const AUTHENTICATED_PAGES = [
   "/admin",
   "/admin/settings",
   "/admin/templates",
+  "/admin/users",
+  "/admin/departments",
 ];
 
 for (const path of AUTHENTICATED_PAGES) {

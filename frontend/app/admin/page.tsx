@@ -25,8 +25,11 @@ import {
   Trash2,
   LayoutTemplate,
   SlidersHorizontal,
+  UserCog,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useRole } from "@/lib/permissions";
+import { NoAccess } from "@/components/common/NoAccess";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 
@@ -179,6 +182,8 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const { can: roleCan, ready: roleReady } = useRole();
+  const canViewAnalytics = roleCan("analytics.view");
 
   const fetchData = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -199,9 +204,14 @@ export default function AdminPage() {
     }
   };
 
+  // Analytics endpoints are it_admin-only server-side; don't fire requests
+  // that can only 403 for any other role.
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (!roleReady) return;
+    if (canViewAnalytics) fetchData();
+    else setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roleReady, canViewAnalytics]);
 
   // ── DMS stat cards config ──
   const overviewCards = dmsData
@@ -296,7 +306,20 @@ export default function AdminPage() {
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
+        {canViewAnalytics && (
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <Link href="/admin/users">
+            <Button variant="secondary" size="sm">
+              <UserCog className="w-4 h-4 mr-2" />
+              <span>Users &amp; Roles</span>
+            </Button>
+          </Link>
+          <Link href="/admin/departments">
+            <Button variant="secondary" size="sm">
+              <Building2 className="w-4 h-4 mr-2" />
+              <span>Departments</span>
+            </Button>
+          </Link>
           <Link href="/admin/templates">
             <Button variant="secondary" size="sm">
               <LayoutTemplate className="w-4 h-4 mr-2" />
@@ -319,7 +342,14 @@ export default function AdminPage() {
             <span>Refresh</span>
           </Button>
         </div>
+        )}
       </header>
+
+      {roleReady && !canViewAnalytics ? (
+        <main className="max-w-[900px] mx-auto p-6 md:p-8">
+          <NoAccess message="The Admin Panel is only available to IT Admins." />
+        </main>
+      ) : (
 
       <main className="max-w-[1400px] mx-auto p-6 md:p-8 space-y-6 overflow-auto" style={{ maxHeight: "calc(100vh - 64px)" }}>
         {/* Tab Switcher */}
@@ -1053,6 +1083,7 @@ export default function AdminPage() {
           </>
         )}
       </main>
+      )}
     </div>
   );
 }

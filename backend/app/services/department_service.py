@@ -2,10 +2,13 @@ from typing import Optional, Set
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import REQUEST_GUCS_KEY, set_request_gucs
 from app.models.department import Department, DepartmentMember, DepartmentFolder
+from app.models.folder import Folder
+from app.models.user import User
 from app.services.audit_service import log_action
 
 # T50 — roles with tenant-wide reach regardless of department membership.
@@ -14,6 +17,10 @@ from app.services.audit_service import log_action
 # departments, not confined to one). The remaining three personas
 # (records_officer, operator, department_head) are scoped to whatever
 # projects their department has been granted.
+#
+# Enforced by Postgres RLS (migration 0053), not by per-query filters: see
+# apply_request_scope. Any role not listed as tenant-wide -- including the
+# legacy 'user' value -- is scoped, so an unexpected role fails closed.
 TENANT_WIDE_ROLES = {"it_admin", "auditor", "legal_counsel"}
 DEPARTMENT_SCOPED_ROLES = {"records_officer", "operator", "department_head"}
 
@@ -37,6 +44,9 @@ async def add_department_member(db: AsyncSession, tenant_id: UUID, department_id
     dept = await db.get(Department, department_id)
     if not dept or dept.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Department not found")
+    user = await db.get(User, user_id)
+    if not user or user.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="User not found")
 
     existing = await db.execute(
         select(DepartmentMember).where(DepartmentMember.department_id == department_id, DepartmentMember.user_id == user_id)
@@ -61,6 +71,9 @@ async def grant_department_folder(db: AsyncSession, tenant_id: UUID, department_
     dept = await db.get(Department, department_id)
     if not dept or dept.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Department not found")
+    folder = await db.get(Folder, folder_id)
+    if not folder or folder.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Folder not found")
 
     existing = await db.execute(
         select(DepartmentFolder).where(DepartmentFolder.department_id == department_id, DepartmentFolder.folder_id == folder_id)
@@ -76,6 +89,64 @@ async def grant_department_folder(db: AsyncSession, tenant_id: UUID, department_
     return grant
 
 
+async def list_departments(db: AsyncSession, tenant_id: UUID) -> list:
+    depts = (await db.execute(
+        select(Department).where(Department.tenant_id == tenant_id).order_by(Department.name)
+    )).scalars().all()
+    members = (await db.execute(
+        select(DepartmentMember.department_id, User.id, User.email, User.full_name, User.role)
+        .join(User, User.id == DepartmentMember.user_id)
+        .where(DepartmentMember.tenant_id == tenant_id)
+        .order_by(User.email)
+    )).all()
+    folders = (await db.execute(
+        select(DepartmentFolder.department_id, Folder.id, Folder.name)
+        .join(Folder, Folder.id == DepartmentFolder.folder_id)
+        .where(DepartmentFolder.tenant_id == tenant_id)
+        .order_by(Folder.name)
+    )).all()
+
+    by_dept = {d.id: {"id": str(d.id), "name": d.name,
+                      "created_at": d.created_at.isoformat() if d.created_at else None,
+                      "members": [], "folders": []} for d in depts}
+    for dept_id, uid, email, full_name, role in members:
+        if dept_id in by_dept:
+            by_dept[dept_id]["members"].append({
+                "user_id": str(uid), "email": email, "full_name": full_name,
+                "role": role.value if hasattr(role, "value") else str(role),
+            })
+    for dept_id, fid, name in folders:
+        if dept_id in by_dept:
+            by_dept[dept_id]["folders"].append({"folder_id": str(fid), "name": name})
+    return list(by_dept.values())
+
+
+async def remove_department_member(db: AsyncSession, tenant_id: UUID, department_id: UUID, user_id: UUID, actor_id: UUID) -> None:
+    res = await db.execute(
+        delete(DepartmentMember)
+        .where(DepartmentMember.tenant_id == tenant_id, DepartmentMember.department_id == department_id,
+               DepartmentMember.user_id == user_id)
+        .returning(DepartmentMember.id)
+    )
+    if not res.first():
+        raise HTTPException(status_code=404, detail="User is not a member of this department")
+    await log_action(db, actor_id, tenant_id, "department.remove_member", resource_type="department",
+                     resource_id=department_id, details={"user_id": str(user_id)})
+
+
+async def revoke_department_folder(db: AsyncSession, tenant_id: UUID, department_id: UUID, folder_id: UUID, actor_id: UUID) -> None:
+    res = await db.execute(
+        delete(DepartmentFolder)
+        .where(DepartmentFolder.tenant_id == tenant_id, DepartmentFolder.department_id == department_id,
+               DepartmentFolder.folder_id == folder_id)
+        .returning(DepartmentFolder.id)
+    )
+    if not res.first():
+        raise HTTPException(status_code=404, detail="This folder isn't granted to this department")
+    await log_action(db, actor_id, tenant_id, "department.revoke_folder", resource_type="department",
+                     resource_id=department_id, details={"folder_id": str(folder_id)})
+
+
 async def delete_department(db: AsyncSession, tenant_id: UUID, department_id: UUID, actor_id: UUID) -> None:
     """Delete a department along with its memberships and folder grants.
 
@@ -83,7 +154,7 @@ async def delete_department(db: AsyncSession, tenant_id: UUID, department_id: UU
     cascade — without this the delete just fails on a referencing row.
 
     Worth being deliberate about: a department is an access-control
-    boundary (see user_has_folder_scope), so removing one REVOKES folder
+    boundary (see apply_request_scope), so removing one REVOKES folder
     scope for every department-scoped member that was relying on it. That
     is the intended effect, not a side effect, which is why the audit
     entry records how much was revoked rather than just the name.
@@ -129,18 +200,57 @@ async def list_user_department_folder_ids(db: AsyncSession, tenant_id: UUID, use
     return set(res.scalars().all())
 
 
-async def user_has_folder_scope(db: AsyncSession, tenant_id: UUID, user_id: UUID, role: str, folder_id: Optional[UUID]) -> bool:
-    """Does this user have access to this folder/project?
+async def list_user_scope_folder_ids(db: AsyncSession, tenant_id: UUID, user_id: UUID) -> Set[UUID]:
+    """Granted folders plus every folder beneath them. A grant covers the
+    whole project subtree, so a document filed in a subfolder of a granted
+    project is in scope too. Needs tenant-wide folder visibility to walk
+    the tree (see apply_request_scope)."""
+    res = await db.execute(text("""
+        WITH RECURSIVE scope AS (
+            SELECT df.folder_id AS id
+            FROM iam_dg_department_folders df
+            JOIN iam_dg_department_members dm ON dm.department_id = df.department_id
+            WHERE dm.user_id = :user_id AND df.tenant_id = :tenant_id
+            UNION
+            SELECT f.id FROM doc_dg_folders f JOIN scope s ON f.parent_id = s.id
+        )
+        SELECT id FROM scope
+    """), {"user_id": user_id, "tenant_id": tenant_id})
+    return set(res.scalars().all())
 
-    Tenant-wide roles always do. Department-scoped roles only do if the
-    folder was explicitly granted to a department they belong to.
-    folder_id=None (root/no folder) is always visible — there's nothing
-    to scope against.
-    """
-    if role in TENANT_WIDE_ROLES:
-        return True
-    if folder_id is None:
-        return True
 
-    granted = await list_user_department_folder_ids(db, tenant_id, user_id)
-    return folder_id in granted
+async def apply_request_scope(db: AsyncSession, tenant_id: UUID, user_id: UUID, role: str) -> None:
+    """Set the Postgres settings migration 0053's department_scope_policy
+    reads. Tenant-wide roles get dept_scoped='0' (no restriction beyond the
+    tenant); department-scoped roles get the folder subtree they were
+    granted -- which may be empty, meaning only their own root uploads.
+    The policies fail closed: a dms_app session that never calls this (or
+    set_tenant_wide_scope) sees no documents at all."""
+    gucs = {"app.current_user_id": str(user_id), "app.dept_scoped": "0", "app.scope_folder_ids": ""}
+    if role not in TENANT_WIDE_ROLES:
+        # Walking the folder tree needs to see it all; the policies fail
+        # closed, so open it up just for this lookup, then narrow.
+        await set_request_gucs(db, {"app.dept_scoped": "0"})
+        folder_ids = await list_user_scope_folder_ids(db, tenant_id, user_id)
+        gucs["app.dept_scoped"] = "1"
+        gucs["app.scope_folder_ids"] = ",".join(str(f) for f in sorted(folder_ids, key=str))
+    await set_request_gucs(db, gucs)
+
+
+async def set_tenant_wide_scope(db: AsyncSession, tenant_id: UUID) -> None:
+    """Tenant context plus explicit tenant-wide scope, for system actors
+    that aren't a user request (e.g. the inbound-email connector)."""
+    await set_request_gucs(db, {"app.current_tenant_id": str(tenant_id), "app.dept_scoped": "0",
+                                "app.scope_folder_ids": "", "app.current_user_id": ""})
+
+
+def request_scope_folder_ids(db: AsyncSession) -> Optional[Set[UUID]]:
+    """The folder ids this request is confined to, or None when it isn't
+    department-scoped. Sessions that never went through apply_request_scope
+    (superuser sessions in the worker and tests, which bypass RLS) count as
+    unscoped here; the database side fails closed regardless."""
+    gucs = db.info.get(REQUEST_GUCS_KEY) or {}
+    if gucs.get("app.dept_scoped") != "1":
+        return None
+    raw = gucs.get("app.scope_folder_ids") or ""
+    return {UUID(f) for f in raw.split(",") if f}

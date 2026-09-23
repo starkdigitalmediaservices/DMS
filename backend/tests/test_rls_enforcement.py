@@ -20,7 +20,7 @@ import uuid
 import pytest
 from sqlalchemy import text, select, func, delete
 
-from app.database import AsyncSessionLocal, AppSessionLocal
+from app.database import AsyncSessionLocal, AppSessionLocal, set_request_gucs
 from app.models.tenant import Tenant
 from app.models.user import User, UserRole
 from app.models.document import Document
@@ -86,16 +86,12 @@ async def test_app_session_local_sees_only_the_context_tenant():
         await db.commit()
     try:
         async with AppSessionLocal() as db:
-            await db.execute(
-                text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": str(tenant_a)}
-            )
+            await set_request_gucs(db, {"app.current_tenant_id": str(tenant_a), "app.dept_scoped": "0"})
             res = await db.execute(select(Document).where(Document.id == doc_id))
             assert res.scalar_one_or_none() is not None
 
         async with AppSessionLocal() as db:
-            await db.execute(
-                text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": str(tenant_b)}
-            )
+            await set_request_gucs(db, {"app.current_tenant_id": str(tenant_b), "app.dept_scoped": "0"})
             res = await db.execute(select(Document).where(Document.id == doc_id))
             assert res.scalar_one_or_none() is None
     finally:

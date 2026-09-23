@@ -12,7 +12,7 @@ if you cut to the "Tight version" bookmarked at each section.
 
 ## Before you start
 
-- [ ] `docker compose ps` — confirm all 9 containers say "Up"
+- [ ] `docker compose ps` — confirm all 10 containers say "Up"
 - [ ] Log in as `biznesskd07@gmail.com` in one browser tab
 - [ ] Have a file manager window pre-connected to the SFTP folder
 - [ ] Have a terminal open, already `cd`'d into the project folder
@@ -453,3 +453,135 @@ rather not show raw config on screen).
 > "The short version: documents get in without anyone having to think
 > about it, they get found by asking rather than browsing, and your
 > data never touches anyone else's. That's the product."
+
+---
+
+## Appendix — testing each role (rehearsal checklist, not read aloud)
+
+Use this before the demo to confirm every role behaves as described in
+4b. Everything here was verified against the live system on 23-Sep.
+
+### Setup (once, ~5 minutes)
+
+1. Open **http://localhost:3000/login** — a normal window for yourself
+   and an **incognito window** for the role under test, so both stay
+   logged in.
+2. Every test account's password is **`RbacTest@2026`**. Your own
+   account (`biznesskd07@gmail.com`) is the IT Admin.
+3. As IT Admin: **Profile menu → Administration → Departments** →
+   grant **"Revenue Records Dept"** a folder with real documents (it
+   only has `best`, 3 files, by default).
+4. Move one unimportant document to the **Bin**, so there is something
+   to test permanent delete on.
+
+### 1. IT Admin — `biznesskd07@gmail.com`
+
+**Use:** runs the system — users, departments, form templates,
+settings; sees everything.
+
+| Try | Expected |
+|---|---|
+| Open the profile menu | **Administration** section with 5 links |
+| Users & Roles → **Add user** | One-time temporary password shown with Copy |
+| Change your **own** role | Not possible — your row is locked |
+| Departments → revoke a folder, refresh the Operator's window | Folder disappears for the Operator immediately |
+| Admin Panel | 45 documents, 7 users; Top Uploaders shows only you |
+| Drive | All folders (Personal, Scanned Documents, …) |
+
+### 2. Operator — `test.operator@veritasdocs-rbac-test.com`
+
+**Use:** day-to-day clerk who checks and corrects what the machine
+read — only within their department.
+
+| Try | Expected |
+|---|---|
+| Drive | **Only** the department's folders (`best` + whatever you granted) |
+| Search / AI Chat for something in another folder | No results from outside the department |
+| Workbench | Review buttons shown (claim, confirm, correct, bulk-confirm) |
+| Bin | **No** "Empty Bin", no permanent delete |
+| Profile menu | **No** Administration section |
+| Go to `localhost:3000/admin/users` directly | "You don't have access" screen |
+
+### 3. Records Officer — `test.records_officer@veritasdocs-rbac-test.com`
+
+**Use:** owns the department's official records — reviews, corrects,
+deletes, certifies.
+
+| Try | Expected |
+|---|---|
+| Drive | Department-only, same as the Operator |
+| Workbench | Review buttons shown |
+| Bin | Permanent delete and **Empty Bin available** (the difference from Operator) |
+| Profile menu | No Administration section |
+
+### 4. Department Head — `test.department_head@veritasdocs-rbac-test.com`
+
+**Use:** oversees the department and approves removals; doesn't do
+data entry.
+
+| Try | Expected |
+|---|---|
+| Drive | Department-only |
+| Workbench | **Read-only notice**, no confirm/correct buttons |
+| Bin | Permanent delete **available** |
+| Profile menu | No Administration section |
+
+### 5. Legal Counsel — `test.legal_counsel@veritasdocs-rbac-test.com`
+
+**Use:** lawyer gathering evidence across all departments; read-only.
+
+| Try | Expected |
+|---|---|
+| Drive | **All** folders |
+| Workbench | Read-only notice |
+| Bin | No permanent delete |
+| Profile menu | No Administration section |
+
+### 6. Auditor — `test.auditor@veritasdocs-rbac-test.com`
+
+**Use:** checks records weren't tampered with; reads everything,
+changes nothing.
+
+| Try | Expected |
+|---|---|
+| Drive | **All** folders |
+| Workbench | Read-only notice |
+| Bin | No permanent delete |
+| Profile menu | No Administration section |
+
+### Permissions with no button yet — test from a terminal
+
+The audit-integrity check, billing and user list are enforced by the
+server but have no screen for most roles. **200** = allowed,
+**403** = blocked.
+
+```bash
+# 1. Log in as the role to test (change the email)
+TOKEN=$(curl -s -X POST localhost:8000/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"test.auditor@veritasdocs-rbac-test.com","password":"RbacTest@2026"}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+
+# 2. Audit-integrity check
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" localhost:8000/api/v1/governance/audit-integrity
+
+# 3. Billing
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" localhost:8000/api/v1/billing/subscription
+
+# 4. User list
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" localhost:8000/api/v1/users
+```
+
+| Check | Allowed (200) | Blocked (403) |
+|---|---|---|
+| Audit integrity | Auditor, IT Admin | Operator, Records Officer, Dept Head, Legal Counsel |
+| Billing | Dept Head, Auditor, IT Admin | Operator, Records Officer, Legal Counsel |
+| User list | IT Admin | everyone else |
+
+### Two live-change tests (the most convincing)
+
+1. **Revoke:** Operator logged in in one window; as Admin, remove a
+   folder on Departments; refresh the Operator's window — it's gone.
+2. **Change role:** as Admin, change the Operator to **Auditor** on
+   Users & Roles; on the Operator's next click they see all folders and
+   lose the review buttons. **Change it back afterwards** so the test
+   accounts stay as listed.

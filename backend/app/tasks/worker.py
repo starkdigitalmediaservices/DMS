@@ -236,18 +236,9 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
             if batch_start + EMBED_BATCH_SIZE < len(chunk_texts):
                 await asyncio.sleep(EMBED_BATCH_DELAY)
 
-        # 5. Extract metadata & scan quality assessment
+        # 5. Extract metadata
         full_text = " ".join([p.get("text", "") for p in pages])
         meta_dict = await extract_metadata(full_text)
-
-        quality_report = None
-        ext = os.path.splitext(filename)[1].lower()
-        if ext in [".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"] or (len(file_bytes) > 4 and file_bytes[:4] in [b"\xff\xd8\xff\xe0", b"\xff\xd8\xff\xe1", b"\x89PNG"]):
-            try:
-                from app.services.scanner_connector import assess_scan_quality
-                quality_report = assess_scan_quality(file_bytes)
-            except Exception as q_err:
-                logger.warning(f"Scan quality check failed during worker ingestion: {q_err}")
 
         # 6. ATOMIC DATABASE TRANSACTION (All-or-Nothing Commit)
         # All database writes (chunks, metadata, document status) occur inside a single atomic transaction.
@@ -277,31 +268,6 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
                         s3_path=s3_path
                     )
                     db.add(db_chunk)
-
-                # Insert quality metadata items if quality check failed
-                if quality_report and not quality_report.get("passed", True):
-                    db.add(
-                        MetadataItem(
-                            id=uuid.uuid4(),
-                            tenant_id=tenant_id,
-                            document_id=document_id,
-                            key="quality_flag",
-                            value={"flag": "needs_review", "warnings": quality_report.get("warnings", [])},
-                            source="scanner_connector",
-                            confidence_score=0.9,
-                        )
-                    )
-                    db.add(
-                        MetadataItem(
-                            id=uuid.uuid4(),
-                            tenant_id=tenant_id,
-                            document_id=document_id,
-                            key="quality_report",
-                            value=quality_report,
-                            source="scanner_connector",
-                            confidence_score=1.0,
-                        )
-                    )
 
                 # Insert metadata items
                 if meta_dict:
@@ -367,6 +333,17 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
                 except Exception as classify_err:
                     logger.warning(f"T23 classification skipped for document {document_id}: {classify_err}")
 
+                # Pages the VLM stage lost outright (provider quota/timeout),
+                # as opposed to pages that genuinely held no table rows. Kept
+                # separate from the OCR-stage failures below and unioned with
+                # them, so a page that failed at BOTH stages is counted once.
+                vlm_failed_pages: list[int] = []
+                # Pages the provider ANSWERED for, with an empty result, on a
+                # page OCR found text on. Not a failure (nothing raised) but
+                # not a success either -- this is how the juni_masjid document
+                # lost 315 of 392 facts while reporting complete.
+                vlm_empty_pages: list[int] = []
+
                 # 5c. T22 — VLM extraction against the matched template, if any.
                 # Best-effort and non-blocking: a savepoint isolates it so a failure
                 # here never aborts the chunk/metadata commit above (search must
@@ -379,6 +356,8 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
                             facts_count = await extract_facts_for_document(
                                 db, tenant_id, document_id, version_id,
                                 file_bytes, filename, pages, template,
+                                failed_pages_out=vlm_failed_pages,
+                                empty_pages_out=vlm_empty_pages,
                             )
                         if facts_count:
                             tmpl_name = f"{template.form_type}/{template.era_label}" if template else "unclassified_scanned_image"
@@ -409,6 +388,26 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
                     except Exception as entity_err:
                         logger.warning(f"Entity graph auto-extraction skipped for document {document_id}: {entity_err}")
 
+                    # Gap found live 2026-09-23: the pass above only ever
+                    # writes entity->fact edges, so Entity 360's "Linked
+                    # entities" panel was 0 for every entity in the system.
+                    # This infers entity->entity relationships from facts
+                    # sharing a row_group_id. Separate savepoint so it can
+                    # fail without taking the node extraction above with it.
+                    try:
+                        from app.services.entity_graph_service import auto_extract_relationships_from_facts
+                        async with db.begin_nested():
+                            relationships_created = await auto_extract_relationships_from_facts(
+                                db, tenant_id, document_id, version_id,
+                            )
+                        if relationships_created:
+                            logger.info(
+                                f"Entity graph inferred {relationships_created} relationship(s) "
+                                f"for document {document_id}"
+                            )
+                    except Exception as rel_err:
+                        logger.warning(f"Entity relationship inference skipped for document {document_id}: {rel_err}")
+
                 # T79 — fuzzy-duplicate check, now at ingest instead of only
                 # on-demand. Needs this document's own chunk-0 embedding,
                 # which is only available once the chunk inserts above have
@@ -433,13 +432,39 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
                     # T76 — every document gets these, not just template
                     # matches (unlike doc_dg_pages, which only T22 writes to).
                     doc.pages_total_count = len(pages)
-                    doc.pages_failed_count = sum(1 for p in pages if p.get("extraction_failed"))
-                    if data_loss_result:
+                    # Was OCR-stage failures only, which is how a document that
+                    # lost most of its pages to VLM provider errors still
+                    # reported pages_failed_count=0 and a clean completeness
+                    # dashboard (live, 2026-09-22).
+                    ocr_failed_pages = {
+                        p.get("page_number") for p in pages if p.get("extraction_failed")
+                    }
+                    doc.pages_failed_count = len(ocr_failed_pages | set(vlm_failed_pages))
+                    loss_details = {}
+                    if data_loss_result and data_loss_result.missing_count > 0:
                         doc.data_loss_words_missing = data_loss_result.missing_count
-                        doc.data_loss_details = (
-                            {"loss_ratio": data_loss_result.loss_ratio, "missing_sample": data_loss_result.missing_sample}
-                            if data_loss_result.missing_count > 0 else None
+                        loss_details = {
+                            "loss_ratio": data_loss_result.loss_ratio,
+                            "missing_sample": data_loss_result.missing_sample,
+                        }
+                    elif data_loss_result:
+                        doc.data_loss_words_missing = data_loss_result.missing_count
+                    if vlm_empty_pages:
+                        loss_details["vlm_empty_pages"] = sorted(vlm_empty_pages)
+                        logger.error(
+                            f"T22 extraction incomplete for document {document_id}: the VLM "
+                            f"returned no rows for {len(vlm_empty_pages)} of {len(pages)} pages "
+                            f"that OCR found text on (pages {sorted(vlm_empty_pages)}) — "
+                            f"indexed with partial facts"
                         )
+                    if vlm_failed_pages:
+                        loss_details["vlm_failed_pages"] = sorted(vlm_failed_pages)
+                        logger.error(
+                            f"T22 extraction incomplete for document {document_id}: "
+                            f"{len(vlm_failed_pages)} of {len(pages)} pages lost at the VLM "
+                            f"stage (pages {sorted(vlm_failed_pages)}) — indexed with partial facts"
+                        )
+                    doc.data_loss_details = loss_details or None
                     if furniture_candidates:
                         doc.page_furniture_candidates = furniture_candidates
                     if duplicate_candidates:

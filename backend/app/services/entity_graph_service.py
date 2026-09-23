@@ -1,3 +1,4 @@
+import re
 import uuid as uuid_module
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -514,6 +515,173 @@ def _classify_fact_field(field_name: str) -> Optional[str]:
     if field_name in _PROPERTY_FIELD_NAMES:
         return "property"
     return None
+
+
+# Relationship inference (2026-09-23). Entity 360's "Linked entities" panel
+# was 0 for every entity in the system: auto_extract_entities_from_facts only
+# ever writes entity->FACT edges, so nothing had ever produced an entity->
+# entity edge outside manual API calls (4 of 1,910 live edges, all hand-made).
+RELATIONSHIP_POLICY_VERSION = "auto-relationships-v1"
+
+# A person field and a property field sharing a Fact.row_group_id came off the
+# SAME physical table row -- row identity recorded at extraction time, not
+# re-derived from geometry (see Fact.row_group_id). In a Waqf register that
+# pairing is a manages-relationship. Row-scoping is also what keeps this pass
+# from repeating the over-linking already visible elsewhere in the graph,
+# where an entity is linked to every same-named fact in its whole document.
+RELATIONSHIP_EDGE_TYPE = "manages"
+
+# Ditto/continuation placeholders. Live count, demo tenant: of 778 row groups
+# holding both a person and a property field, 348 carry one of these on one or
+# both sides. Linking them would create entities literally named "..".
+_PLACEHOLDER_LABELS = {
+    "", "do", "ditto", "same", "same as above", "nil", "na", "n/a", "none", "-",
+    # Real strings in the registers that are not real entities. "Not available"
+    # became a person node with 10 relationships on the first live run.
+    "not available", "not known", "unknown", "no", "yes", "nn", "xx",
+}
+# Latin or Devanagari -- a label must carry a real word, not just digits,
+# punctuation or a stray glyph off a bad scan.
+_MEANINGFUL_LABEL_RE = re.compile(r"[A-Za-z\u0900-\u097F]{3,}")
+
+
+def _is_meaningful_label(label: Optional[str]) -> bool:
+    """A label worth building a legal-ish relationship on."""
+    raw = (label or "").strip()
+    if not raw:
+        return False
+    if raw.lower().strip(" .-\u2013\u2014") in _PLACEHOLDER_LABELS:
+        return False
+    return bool(_MEANINGFUL_LABEL_RE.search(raw))
+
+
+async def auto_extract_relationships_from_facts(
+    db: AsyncSession,
+    tenant_id: UUID,
+    document_id: UUID,
+    version_id: UUID,
+) -> int:
+    """Infer entity->entity relationships from facts sharing a row_group_id.
+
+    Best-effort, same contract as auto_extract_entities_from_facts: never
+    raises on a per-row failure, returns 0 rather than inventing an actor.
+
+    Deliberately tier 2, not tier 3. A relationship read off one physical
+    table row is a mechanical observation of the same evidential class as
+    "mentioned_in" -- it auto-commits as 'machine' and stays permanently
+    labelled machine-made. Tier 3 escrow stays reserved for identity claims
+    ("these two records are the same legal person"), which are a different
+    question and which this pass deliberately does not attempt.
+
+    Idempotent: an existing edge of the same type between the same two nodes
+    is left alone, so re-ingest and backfill can both run safely.
+
+    Returns the number of new relationship edges created this call."""
+    stmt = select(Fact).where(
+        Fact.tenant_id == tenant_id,
+        Fact.document_id == document_id,
+        Fact.version_id == version_id,
+        Fact.row_group_id.isnot(None),
+        Fact.field_name.in_(_PERSON_FIELD_NAMES | _PROPERTY_FIELD_NAMES),
+    )
+    res = await db.execute(stmt)
+    facts = list(res.scalars().all())
+    if not facts:
+        return 0
+
+    from app.services.document_service import _resolve_policy_actor
+    actor_id = await _resolve_policy_actor(db, tenant_id, {})
+    if actor_id is None:
+        return 0
+
+    # One row -> at most one relationship. Where a row somehow carries more
+    # than one person or property field, take the first meaningful one rather
+    # than emitting a cross product.
+    rows: Dict[Any, Dict[str, Any]] = {}
+    for fact in facts:
+        entity_type = _classify_fact_field(fact.field_name)
+        if entity_type is None:
+            continue
+        raw_value = fact.value.get("v") if isinstance(fact.value, dict) else None
+        label = str(raw_value).strip() if raw_value else ""
+        if not _is_meaningful_label(label):
+            continue
+        slot = rows.setdefault(fact.row_group_id, {})
+        if entity_type not in slot:
+            slot[entity_type] = (label, fact)
+
+    edges_created = 0
+    nodes_created = 0
+    for row_group_id, slot in rows.items():
+        if "person" not in slot or "property" not in slot:
+            continue
+        person_label, person_fact = slot["person"]
+        property_label, property_fact = slot["property"]
+
+        node_ids = {}
+        try:
+            for entity_type, label in (("person", person_label), ("property", property_label)):
+                similar = await find_similar_nodes(db, tenant_id, entity_type, label)
+                if similar:
+                    node_ids[entity_type] = UUID(similar[0]["id"])
+                else:
+                    node = await create_node(
+                        db, tenant_id, entity_type, label, actor_id=actor_id,
+                        attributes={
+                            "auto_extracted": True,
+                            "extraction_policy_version": RELATIONSHIP_POLICY_VERSION,
+                        },
+                    )
+                    node_ids[entity_type] = node.id
+                    nodes_created += 1
+        except HTTPException:
+            continue
+
+        src, dst = node_ids["person"], node_ids["property"]
+        if src == dst:
+            # pg_trgm collapsed both sides onto one node (a row where the
+            # manager and the property carry near-identical text, common on a
+            # bad scan). A self-edge is meaningless -- skip rather than store.
+            continue
+
+        existing = await db.execute(
+            select(EntityEdge).where(
+                EntityEdge.tenant_id == tenant_id,
+                EntityEdge.source_node_id == src,
+                EntityEdge.target_node_id == dst,
+                EntityEdge.edge_type == RELATIONSHIP_EDGE_TYPE,
+            ).limit(1)
+        )
+        if existing.scalar_one_or_none() is not None:
+            continue
+
+        try:
+            await create_edge(
+                db, tenant_id, edge_type=RELATIONSHIP_EDGE_TYPE, tier=2,
+                source_node_id=src, target_type="entity", target_node_id=dst,
+                confidence=min(
+                    person_fact.confidence if person_fact.confidence is not None else 1.0,
+                    property_fact.confidence if property_fact.confidence is not None else 1.0,
+                ),
+                evidence_fact_id=property_fact.id,
+                created_by_policy_version=RELATIONSHIP_POLICY_VERSION,
+            )
+            edges_created += 1
+        except HTTPException:
+            continue
+
+    if edges_created or nodes_created:
+        await log_action(
+            db, actor_id, tenant_id, "entity_graph.auto_relationships",
+            resource_type="document", resource_id=document_id,
+            details={
+                "edges_created": edges_created,
+                "nodes_created": nodes_created,
+                "policy_version": RELATIONSHIP_POLICY_VERSION,
+            },
+        )
+
+    return edges_created
 
 
 async def auto_extract_entities_from_facts(

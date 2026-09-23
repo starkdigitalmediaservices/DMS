@@ -45,7 +45,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.factory import get_vlm_provider, get_llm_provider
@@ -731,6 +731,13 @@ async def _stitch_vertical_segments(
     return segments
 
 
+# Chars of OCR text on a page below which "the VLM returned nothing" is
+# treated as a genuinely blank page rather than a lost extraction.
+# Deliberately low: a blank scan OCRs to ~0 chars, so anything above this
+# means there WAS content the VLM should have seen.
+VLM_EMPTY_PAGE_MIN_OCR_CHARS = 20
+
+
 async def extract_facts_for_document(
     db: AsyncSession,
     tenant_id: UUID,
@@ -740,9 +747,35 @@ async def extract_facts_for_document(
     filename: str,
     pages_text: List[dict],
     template: Optional[Template] = None,
+    failed_pages_out: Optional[List[int]] = None,
+    empty_pages_out: Optional[List[int]] = None,
 ) -> int:
     """Runs VLM extraction across a document's pages.
-    Returns the number of facts written."""
+    Returns the number of facts written.
+
+    `failed_pages_out`, when given, is filled with the page numbers whose
+    VLM call RAISED (provider quota/timeout/connection error) rather than
+    returning an unusable-but-parseable response. Live bug, 2026-09-22:
+    those pages were caught per-page, logged at WARNING and skipped, and
+    nothing downstream ever learned -- worker.py derives
+    pages_failed_count from the OCR pages list alone, so a document that
+    lost most of its pages at the VLM stage still finished as
+    status="indexed" with pages_failed_count=0. Reporting them lets the
+    caller record real data loss instead of silently shipping a partial
+    extraction as a complete one.
+
+    A page that legitimately yields no rows (a cover page, a blank) is
+    NOT a failure and is deliberately not reported here.
+
+    `empty_pages_out`, when given, is filled with the page numbers where
+    the VLM returned a well-formed but EMPTY result for a page OCR did
+    find text on. Live regression, 2026-09-22 (juni_masjid): nothing
+    raised -- all 16 pages had a cached provider response -- but 8 came
+    back as {"rows": [], "marginalia": []}, indistinguishable from a
+    genuinely blank page. Those 8 silently cost 129 table facts and 183
+    marginalia while the document still reported complete. OCR text on
+    the page is the evidence something was there to extract; a truly
+    blank page has neither and is correctly not reported."""
     vlm = get_vlm_provider()
     if vlm is None:
         return 0
@@ -801,6 +834,15 @@ async def extract_facts_for_document(
 
             rows, marginalia, page_header = await _call_vlm_with_parse_retry(db, vlm, file_hash, page_number, png_bytes, prompt)
             if not rows and not marginalia and not page_header:
+                if empty_pages_out is not None:
+                    ocr_page = pages_text[page_number - 1] if page_number <= len(pages_text) else {}
+                    ocr_chars = len(((ocr_page or {}).get("text") or "").strip())
+                    if ocr_chars >= VLM_EMPTY_PAGE_MIN_OCR_CHARS:
+                        logger.warning(
+                            f"T22 VLM returned no rows for page {page_number} of {filename}, "
+                            f"but OCR found {ocr_chars} chars of text there -- extraction incomplete"
+                        )
+                        empty_pages_out.append(page_number)
                 continue
 
             page = await _get_or_create_page(db, tenant_id, document_id, version_id, page_number, width, height, rotation)
@@ -816,7 +858,47 @@ async def extract_facts_for_document(
             # Wardha.pdf: " with nothing after the colon, hiding whether
             # it was a timeout, a connection error, or something else.
             logger.warning(f"T22 VLM extraction failed on page {page_number} of {filename}: {type(e).__name__}: {e}")
+            if failed_pages_out is not None:
+                failed_pages_out.append(page_number)
             continue
+
+    # Idempotency guard, deliberately placed HERE and not before Phase A.
+    #
+    # Re-running extraction against a document that already holds Facts
+    # INSERTs a second full set rather than replacing them -- the hazard
+    # scripts/retry_wardha_extraction.py has warned about in a docstring
+    # since 2026-09-02 ("Delete existing doc_dg_facts rows for the document
+    # first"), enforced nowhere until now.
+    #
+    # The first version of this guard purged BEFORE Phase A ran, and cost a
+    # real document its extraction on 2026-09-23: every page failed on
+    # provider quota, nothing replaced what had been deleted, and
+    # juni_masjid went from 392 facts to the 8 a human had verified. Purging
+    # only once Phase A has actually produced something means a total
+    # provider outage now leaves the existing extraction untouched.
+    #
+    # Residual risk, stated rather than hidden: a PARTIAL extraction (some
+    # pages succeeded, some failed) still replaces a fuller previous run.
+    # That is visible rather than silent -- failed and empty pages are
+    # reported via failed_pages_out/empty_pages_out and recorded on the
+    # document -- but it is not prevented here.
+    #
+    # Human-verified facts are always preserved: re-extraction must never
+    # destroy a reviewer's sign-off.
+    if page_extractions:
+        await db.execute(
+            delete(Fact).where(
+                Fact.document_id == document_id,
+                Fact.version_id == version_id,
+                Fact.verified_by_actor_id.is_(None),
+            )
+        )
+    else:
+        logger.warning(
+            f"T22 extraction produced nothing for {filename} — leaving the "
+            f"existing {'facts' if failed_pages_out else 'extraction'} in place "
+            f"rather than replacing it with an empty result"
+        )
 
     # Phase B (TS1) — decide which consecutive pages are the same table
     # continuing downward, so a continuation row that starts a fresh page

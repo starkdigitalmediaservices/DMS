@@ -348,6 +348,13 @@ async def _ingest_document_task_async(document_id_str: str, version_id_str: str,
                 # Best-effort and non-blocking: a savepoint isolates it so a failure
                 # here never aborts the chunk/metadata commit above (search must
                 # never wait on this, Section 3.5).
+                # `ext` used to be defined by the scan-quality block that sat
+                # above this one; removing that block with the scanner feature
+                # took the definition with it and left this line referencing an
+                # undefined name. It only fires when a PDF has no matched
+                # template (the `or` short-circuits otherwise), which is why no
+                # test caught it -- see test_unclassified_pdf_still_reaches_extraction.
+                ext = os.path.splitext(filename)[1].lower()
                 is_scanned_image = filename.lower().rsplit(".", 1)[-1] in {"jpg", "jpeg", "png", "tiff", "bmp", "webp"}
                 if template or is_scanned_image or ext == ".pdf":
                     try:

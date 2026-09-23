@@ -16,14 +16,35 @@ from app.models.ocr_archive import OCRArchive
 from app.models.vlm_archive import VLMArchive
 
 
+def _has_failed_page(pages: Optional[List[dict]]) -> bool:
+    return any(p.get("extraction_failed") for p in (pages or []))
+
+
+# A failed page is usually a provider failure (quota exhausted, timeout,
+# outage), not a property of the file. Caching it made the failure
+# permanent: on 2026-09-23, 153 of 171 cached chandra results and 97 of
+# 117 paddleocr results were failures -- mostly from a Datalab quota 403 --
+# so re-uploading those files after the credits were topped up failed
+# again without the provider ever being called. Failed results are now
+# never served from, or written to, the cache.
+
 async def get_cached_ocr(db: AsyncSession, content_hash: str, ocr_engine: str) -> Optional[List[dict]]:
     archived = await db.get(OCRArchive, {"content_hash": content_hash, "ocr_engine": ocr_engine})
-    return archived.pages if archived else None
+    if archived is None or _has_failed_page(archived.pages):
+        return None
+    return archived.pages
 
 
 async def record_ocr(db: AsyncSession, content_hash: str, ocr_engine: str, pages: List[dict]) -> None:
+    if _has_failed_page(pages):
+        return
     existing = await db.get(OCRArchive, {"content_hash": content_hash, "ocr_engine": ocr_engine})
     if existing:
+        # Only a previously failed entry is replaced; a good one stays as it
+        # was first recorded (the archive is also a record of what was read).
+        if _has_failed_page(existing.pages):
+            existing.pages = pages
+            await db.flush()
         return
     db.add(OCRArchive(content_hash=content_hash, ocr_engine=ocr_engine, pages=pages))
     await db.flush()

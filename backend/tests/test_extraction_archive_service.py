@@ -64,6 +64,48 @@ async def test_ocr_cache_write_idempotent_first_write_wins():
             await db.rollback()
 
 
+@pytest.mark.asyncio
+async def test_failed_ocr_is_never_cached():
+    """A failed page is a provider failure (quota, timeout), not a fact
+    about the file; caching it made every later re-upload fail too."""
+    from sqlalchemy import delete
+    from app.models.ocr_archive import OCRArchive
+    content_hash = f"test_hash_failed_{uuid.uuid4().hex}"
+    failed = [{"page_number": 1, "text": "Image document: x.png", "extraction_failed": True}]
+    async with AsyncSessionLocal() as db:
+        try:
+            await record_ocr(db, content_hash, "chandra", failed)
+            await db.commit()
+            assert await get_cached_ocr(db, content_hash, "chandra") is None
+            assert await db.get(OCRArchive, {"content_hash": content_hash, "ocr_engine": "chandra"}) is None
+        finally:
+            await db.execute(delete(OCRArchive).where(OCRArchive.content_hash == content_hash))
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_poisoned_entry_is_ignored_then_replaced_by_a_good_read():
+    """Entries written before the fix (failed pages already in the cache)
+    must be treated as a miss, and the next successful read replaces them."""
+    from sqlalchemy import delete
+    from app.models.ocr_archive import OCRArchive
+    content_hash = f"test_hash_poisoned_{uuid.uuid4().hex}"
+    failed = [{"page_number": 1, "text": "Image document: x.png", "extraction_failed": True}]
+    good = [{"page_number": 1, "text": "Survey No. 42", "extraction_failed": False}]
+    async with AsyncSessionLocal() as db:
+        try:
+            db.add(OCRArchive(content_hash=content_hash, ocr_engine="chandra", pages=failed))
+            await db.commit()
+            assert await get_cached_ocr(db, content_hash, "chandra") is None
+
+            await record_ocr(db, content_hash, "chandra", good)
+            await db.commit()
+            assert await get_cached_ocr(db, content_hash, "chandra") == good
+        finally:
+            await db.execute(delete(OCRArchive).where(OCRArchive.content_hash == content_hash))
+            await db.commit()
+
+
 def test_vlm_cache_key_deterministic():
     k1 = compute_vlm_cache_key("filehash1", 1, "prompt text", "chandra")
     k2 = compute_vlm_cache_key("filehash1", 1, "prompt text", "chandra")

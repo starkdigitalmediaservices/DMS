@@ -153,6 +153,191 @@ org's documents.
 
 ---
 
+## 4b. Administration — who runs the system, and who sees what
+
+Everything in this section lives under **profile menu (top-right avatar)
+→ Administration**. It has five entries: **Admin Panel, Users & Roles,
+Departments, Form Templates, Settings**. The whole section is visible
+**only to IT Admin** — log in as any other role and it isn't in the
+menu at all, and typing the address shows a "no access" screen.
+
+**Before the meeting (in addition to the checklist at the top):**
+- [ ] Second browser window, **incognito**, logged in as
+      `test.operator@veritasdocs-rbac-test.com` / `RbacTest@2026`
+- [ ] On **Departments**, grant "Revenue Records Dept" one folder with
+      real documents in it (right now it only has `best`, 3 files)
+- [ ] ⚠️ **Personal files are in this organization's Drive.** The
+      Drive and the Workbench's *unclassified* list include a salary
+      slip, several resumes, a third party's CV and test files
+      (`broken_test.pdf`, `App.test.tsx`…). Move them to the Bin — or
+      demo from a department-scoped login (the operator only sees its
+      granted folder) — before sharing your screen
+
+**Say, opening this section:**
+> "So far you've seen what an ordinary user does. Now the other side:
+> the person who runs the system. Everything an IT administrator needs
+> is in one place, and — importantly — nobody else can even see it."
+
+**Do:** Click the avatar → point at the **Administration** heading
+and the five links under it.
+
+### 4b-1. Admin Panel — the health dashboard
+
+**What it is:** a live dashboard for *your organization only* — it
+never shows another organization's numbers. Two tabs.
+
+- **DMS Analytics tab**
+  - Headline tiles: **Total Users, Tenants** (always 1 — it's your
+    organization), **Documents, Trashed, Folders, Storage, AI Chunks**
+    (the searchable pieces documents are split into), **Chat Sessions,
+    Audit Logs**
+  - **Document Processing Status** — how many documents are indexed,
+    still processing, or failed
+  - **File Types Distribution** — PDFs vs images vs Office files, by
+    count and size
+  - **Upload Timeline (Last 30 Days)** — uploads per day
+  - **Top Uploaders** — who uploaded how much (documents and size)
+  - **Storage Per Tenant** — your organization's documents, storage
+    and user count on one line
+  - **Recent Audit Activity** — the latest recorded actions: who did
+    what, when, from which IP
+- **API Analytics tab** — how the system itself is behaving
+  - **Total Calls, Calls Today, Avg Response** time, **Error Rate**
+  - Calls by HTTP method, status-code distribution
+  - **Top Endpoints by Volume** and **Slowest Endpoints** — where the
+    load and the delays are
+  - **Recent API Calls** — the last requests, with status and timing
+
+**Say:**
+> "This is the administrator's health check. How much is stored, what's
+> still processing, what's failing, and a live trail of who did what.
+> The second tab is for the technical team — response times and error
+> rates, so problems show up here before users report them."
+
+### 4b-2. Users & Roles — who is who
+
+**What it is:** every person in the organization, their role, and
+their department(s).
+
+- **Change a role:** pick from the dropdown on a row — it takes effect
+  on that person's **very next click**, not at their next login
+- **Add user:** email, name, role → the system generates a **one-time
+  temporary password**, shown once with a Copy button. It is never
+  shown again; the new user changes it from their profile
+- **Safety guards:** your own row is locked (you can't change your own
+  role), and the system refuses to demote the last IT Admin — so an
+  organization can never lock itself out
+
+**The six roles, in one breath each:**
+| Role | What they do | What they see |
+|---|---|---|
+| **IT Admin** | Runs the system, manages users, departments, templates, settings | Everything |
+| **Records Officer** | Reviews extracted data, can delete, issues Section 63 certificates | Their department's folders |
+| **Operator** | Day-to-day data review and correction | Their department's folders |
+| **Department Head** | Oversees the department, can delete, sees billing | Their department's folders |
+| **Legal Counsel** | Read-only across everything, certificates, exports | Everything, read-only |
+| **Auditor** | Read-only, runs the audit-integrity check | Everything, read-only |
+
+**Do:** Click **Add user**, fill in a demo person (use an address like
+`demo.clerk@example.com`), choose **Operator**, create → show the
+one-time password.
+
+**Say:**
+> "Adding a person takes ten seconds. They get a temporary password
+> once, it's never stored where anyone can read it back, and their role
+> decides everything they can do — enforced by the server, not by
+> hiding buttons."
+
+### 4b-3. Departments — who sees which documents
+
+**What it is:** a department is a group of people, granted access to
+specific **projects (folders)**. Members of department-scoped roles
+(Records Officer, Operator, Department Head) see **only** their
+department's folders — plus anything they uploaded themselves. A grant
+covers the folder **and everything inside it**.
+
+- Create / delete a department
+- **Add / remove members** — pick from the user list
+- **Grant / revoke folders** — pick from the folder tree
+
+**Do — the strongest moment of the demo:**
+1. Show the Operator's window: they see only the granted folder.
+2. In the Admin window, **revoke** that folder.
+3. Refresh the Operator's window — it's gone. Search for something
+   that was in it — nothing comes back.
+
+**Say:**
+> "Access is decided by the database itself, not by the screen. Search,
+> the AI assistant, exports, direct links — none of them can reach a
+> folder your department hasn't been granted. And it fails safe: if a
+> developer ever forgets a rule, people see *less*, never more."
+
+### 4b-4. Form Templates — teaching the system your forms
+
+**What it is:** a template tells the system what a particular kind of
+document looks like, so it can **recognise** it and **pull out each
+field automatically** — including tables that run across pages.
+Without a matching template, a document is still stored and searchable,
+but stays *unclassified* and no field-by-field extraction happens.
+
+Each template has:
+- **Form type** — e.g. *Maharashtra State Wakf Gazette Register*
+- **Era label** — which law/period the form belongs to, e.g. *BPT Act
+  1950 / Waqf Act 1995* — the same form changed across decades
+- **Layout** — `single_page`, or `spread` (one entry printed across
+  two facing pages, which the system joins back together)
+- **Fields** — the columns to read, each with a type (text, number, or
+  free-text "blob" such as an area written as "1 ha 25 are") and an
+  optional role that drives the special handlers: `serial` (the row
+  number, used to join spreads), `chain_anchor` (for ditto marks —
+  "same as above"), `continuation_text` (rows that continue onto the
+  next page)
+
+**The five real templates to talk about:**
+1. Waqf Institution Registration File — BPT Act 1950 / Waqf Act 1995
+2. Maharashtra State Wakf Gazette Register — Aurangabad Gazette, 1973 (19 fields, spread)
+3. Gazette Register, Form A (no-property Wakfs) — Marathwada, 1973-74
+4. Gazette Register, Form B (Property Assessment) — Wardha, 2004
+5. Maharashtra Gaon Namuna 7/12 Survey Record — Pune village land record
+
+**Say:**
+> "This is how the system learns a new kind of register. You describe
+> the form once — its columns, whether an entry spans two pages — and
+> from then on every scan of that form is recognised and read field by
+> field. The Gazette register from 1973 is a two-page spread; the system
+> joins each entry across both pages, and if the two halves don't
+> agree, it stops and asks a person instead of guessing."
+
+### 4b-5. Settings — tuning without a developer
+
+**What it is:** the system's adjustable thresholds, editable in place
+(pencil → change → save), each with a plain description. Currently 18,
+for example:
+- **Trash retention days** (30) — how long deleted items are kept
+  before permanent removal
+- **Search relevance threshold** and **search cache time** — how
+  strict search is, and how long answers are reused
+- **Duplicate similarity threshold** (0.92) — how alike two documents
+  must be to be flagged as possible duplicates
+- **Chunk size / overlap** — how documents are split for AI search
+- **Table-stitch thresholds** — how confident the system must be
+  before joining table rows across pages
+
+**Say:**
+> "Everything that's a judgement call — how long to keep deleted files,
+> how strict search is, when to flag a duplicate — is a setting here,
+> not a line of code. Your IT team adjusts it; no developer, no
+> redeploy."
+
+*(Don't change a value live — just open the pencil on one row and
+cancel.)*
+
+**Tight version:** Users & Roles → Departments → the live revoke
+(4b-3). That's the whole trust story in about three minutes; skip the
+Admin Panel, Templates and Settings unless asked.
+
+---
+
 ## 5. One more trust signal — no vendor lock-in
 
 **Do:** Open the `.env` config file (or just describe it if you'd
@@ -233,11 +418,11 @@ rather not show raw config on screen).
 > with generation on top — not generation with search bolted on."
 
 **"What happens if the AI gets something wrong?"**
-> "It's instructed to answer only from retrieved excerpts, and every
-> claim traces to a specific document and page — checkable in one
-> click. It doesn't yet have a hard-refusal guarantee for ungrounded
-> answers; that's on the roadmap, and I'd rather tell you that directly
-> than have it surface as a surprise."
+> "Every claim in an answer must cite a specific document and page, and
+> it's checked: a claim without a valid source is dropped, and a number
+> that doesn't appear in the cited passage is dropped too. If nothing
+> survives that check, the system refuses to answer rather than guess —
+> 'no passage, no answer'."
 
 **"Can this run fully on our own infrastructure?"**
 > "The core stack — database, storage, search — already runs fully
@@ -252,12 +437,14 @@ rather not show raw config on screen).
 > increasingly store more than office documents."
 
 **"Is this production-ready, or a prototype?"**
-> "Core platform — ingestion, hybrid search, multi-tenant security —
-> is built and tested end to end, including live tonight. Some
-> enterprise features — human-review workflows, tamper-evident audit
-> trails, fine-grained role permissions — are near-term roadmap, not
-> shipped yet. I'd rather say that directly than have you find the gap
-> yourself later."
+> "Core platform — ingestion, hybrid search, multi-tenant security,
+> the human-review workbench, tamper-evident audit trails, and six
+> role-based personas with department-level access — is built, and the
+> backend runs 412 automated tests. What's still open is mostly on
+> your side: the reference document set to measure accuracy against, a
+> GPU for fully offline operation, and sign-off on the Section 63
+> certificate wording. I'd rather say that directly than have you find
+> the gap yourself later."
 
 ---
 

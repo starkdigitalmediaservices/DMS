@@ -83,6 +83,11 @@ async def purge_tenants_created_by_this_session():
         pre_existing = {
             row[0] for row in (await conn.execute(text("SELECT id FROM iam_dg_tenants"))).fetchall()
         }
+        pre_existing_global_templates = {
+            row[0] for row in (await conn.execute(
+                text("SELECT id FROM doc_dg_templates WHERE tenant_id IS NULL")
+            )).fetchall()
+        }
     # Dispose immediately: this fixture is session-scoped, so anything left
     # in the pool here stays bound to the session's event loop, and the
     # per-test dispose above then hands the next test a connection created
@@ -92,6 +97,30 @@ async def purge_tenants_created_by_this_session():
     await engine.dispose()
 
     yield
+
+    # Global templates (tenant_id NULL) belong to no tenant, so the tenant
+    # purge below never reaches them -- and most tests create theirs that
+    # way. 318 "... Test Form <hex>" rows had piled up in the dev database
+    # by 2026-09-23, burying the 5 real templates on the admin screen.
+    # Remove only the ones that appeared during this session.
+    async with engine.begin() as conn:
+        new_templates = [
+            str(row[0]) for row in (await conn.execute(
+                text("SELECT id FROM doc_dg_templates WHERE tenant_id IS NULL")
+            )).fetchall()
+            if row[0] not in pre_existing_global_templates
+        ]
+        if new_templates:
+            await conn.execute(
+                text("UPDATE doc_dg_documents SET matched_template_id = NULL "
+                     "WHERE matched_template_id = ANY(CAST(:ids AS uuid[]))"),
+                {"ids": new_templates},
+            )
+            await conn.execute(
+                text("DELETE FROM doc_dg_templates WHERE id = ANY(CAST(:ids AS uuid[]))"),
+                {"ids": new_templates},
+            )
+            print(f"\n[conftest] purged {len(new_templates)} global template(s) created by this session")
 
     async with engine.begin() as conn:
         current = {

@@ -132,9 +132,12 @@ async def get_admin_analytics(
             func.count(Document.id).label("doc_count"),
             func.coalesce(func.sum(DocumentVersion.file_size_bytes), 0).label("total_size")
         )
-        .join(Document, Document.tenant_id == User.tenant_id)
+        # Joined on who created each document. Joining on tenant_id credited
+        # every user with every document in the tenant (all 7 users showed
+        # the same 45 uploads, found 2026-09-23).
+        .join(Document, Document.created_by == User.id)
         .outerjoin(DocumentVersion, Document.current_version_id == DocumentVersion.id)
-        .where(User.tenant_id == tenant_id, Document.is_trashed == False)
+        .where(User.tenant_id == tenant_id, Document.tenant_id == tenant_id, Document.is_trashed == False)
         .group_by(User.id, User.full_name, User.email)
         .order_by(func.count(Document.id).desc())
         .limit(10)
@@ -150,28 +153,16 @@ async def get_admin_analytics(
     ]
 
     # ── Storage Per Tenant ──
-    tenant_storage_res = await db.execute(
-        select(
-            Tenant.name.label("tenant_name"),
-            func.count(Document.id).label("doc_count"),
-            func.coalesce(func.sum(DocumentVersion.file_size_bytes), 0).label("total_size"),
-            func.count(func.distinct(User.id)).label("user_count"),
-        )
-        .outerjoin(Document, Document.tenant_id == Tenant.id)
-        .outerjoin(DocumentVersion, Document.current_version_id == DocumentVersion.id)
-        .outerjoin(User, User.tenant_id == Tenant.id)
-        .where(Tenant.id == tenant_id)
-        .group_by(Tenant.id, Tenant.name)
-    )
-    storage_per_tenant = [
-        {
-            "tenant_name": row.tenant_name,
-            "doc_count": row.doc_count,
-            "total_size": row.total_size,
-            "user_count": row.user_count,
-        }
-        for row in tenant_storage_res.all()
-    ]
+    # Reuses the overview totals above. The previous single query joined
+    # documents AND users onto the tenant row, so every document was counted
+    # once per user (448 documents / 1.7 GB shown for a real 45 / 231 MB).
+    tenant_name = (await db.execute(select(Tenant.name).where(Tenant.id == tenant_id))).scalar()
+    storage_per_tenant = [{
+        "tenant_name": tenant_name,
+        "doc_count": total_documents,
+        "total_size": total_storage,
+        "user_count": total_users,
+    }] if tenant_name is not None else []
 
     # ── Recent Activity (Last 20 audit logs) ──
     activity_res = await db.execute(

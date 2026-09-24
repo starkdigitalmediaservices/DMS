@@ -12,14 +12,9 @@ import {
   AlertCircle,
   Keyboard,
   PenLine,
-  Pencil,
-  Undo2,
-  Eye,
   X,
   Info,
   FileText,
-  Layers,
-  SlidersHorizontal,
   ArrowUpDown,
   ArrowLeftRight,
   Ban,
@@ -28,26 +23,16 @@ import {
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import type { FolderTreeNode } from "@/types";
 import { useI18n } from "@/lib/i18n";
 import { useRole } from "@/lib/permissions";
 import { sentinelLabel } from "@/lib/factLabels";
+import { confidenceInfo } from "@/lib/fieldLabels";
 import WorkbenchTabs from "@/components/workbench/WorkbenchTabs";
 import ReviewDocumentsView from "@/components/workbench/ReviewDocumentsView";
 import ReviewScreen from "@/components/review/ReviewScreen";
 
 function openInDocumentHref(fact: { document_id: string; fact_id: string }): string {
   return `/workbench?doc=${encodeURIComponent(fact.document_id)}&fact=${encodeURIComponent(fact.fact_id)}&from=queue`;
-}
-
-function flattenFolders(nodes: FolderTreeNode[], depth = 0): { id: string; name: string; depth: number }[] {
-  const out: { id: string; name: string; depth: number }[] = [];
-  for (const n of nodes) {
-    out.push({ id: n.id, name: n.name, depth });
-    const kids = n.subfolders || n.children || [];
-    if (kids.length) out.push(...flattenFolders(kids, depth + 1));
-  }
-  return out;
 }
 
 interface QueueFact {
@@ -68,35 +53,26 @@ interface CategoryTab {
   key: Category;
   label: string;
   description: string;
-  available: boolean;
 }
 
 function formatValue(value: any): string {
   if (value && typeof value === "object" && "page_a" in value && "page_b" in value) {
-    return `Page ${value.page_a} ↔ page ${value.page_b}`;
+    return `Page ${value.page_a} and page ${value.page_b}`;
   }
-  if (value && typeof value === "object" && "v" in value) return String(value.v);
+  if (value && typeof value === "object" && "v" in value) return value.v === null || value.v === "" ? "(empty)" : String(value.v);
   if (value && typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
 
-// Bare decimals gave no sense of "is this fine or concerning" at a glance.
-function confidenceBadge(confidence: number | null): { text: string; className: string } {
-  if (confidence === null) return { text: "—", className: "text-[#5f6368] bg-[#f0f4f9] border-[#e1e3e1]" };
-  if (confidence >= 0.8) return { text: confidence.toFixed(2), className: "text-emerald-700 bg-emerald-50 border-emerald-200" };
-  if (confidence >= 0.5) return { text: confidence.toFixed(2), className: "text-amber-700 bg-amber-50 border-amber-200" };
-  return { text: confidence.toFixed(2), className: "text-red-700 bg-red-50 border-red-200" };
-}
+const GUIDE_KEY = "check_guide_dismissed";
 
+/** The list of values the computer wasn't sure about, one at a time. */
 function QueueWorkbench() {
   const { t } = useI18n();
   const router = useRouter();
-  // Everyone can read the queues; only reviewer roles can act on them
-  // (claim/release/confirm/bulk-edit/bulk-confirm/mark-handwritten/
-  // resolve-stitch, plus corpus calibration) — the rest get a read-only view.
+  // Everyone can read the list; only reviewer roles can act on it.
   const { can: roleCan, ready: roleReady } = useRole();
   const canReview = roleCan("facts.review");
-  const canCalibrate = roleCan("corpus.calibrate");
   const [category, setCategory] = useState<Category>("low_confidence");
   const [facts, setFacts] = useState<QueueFact[]>([]);
   const [total, setTotal] = useState(0);
@@ -107,197 +83,67 @@ function QueueWorkbench() {
   const [notice, setNotice] = useState("");
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [categoryCounts, setCategoryCounts] = useState<Partial<Record<Category, number>>>({});
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+
+  useEffect(() => {
+    try {
+      setShowGuide(localStorage.getItem(GUIDE_KEY) !== "1");
+    } catch {
+      setShowGuide(true);
+    }
+  }, []);
+  const dismissGuide = () => {
+    setShowGuide(false);
+    try {
+      localStorage.setItem(GUIDE_KEY, "1");
+    } catch {}
+  };
 
   const fieldLabel = useCallback((fieldName: string): string => sentinelLabel(fieldName, t), [t]);
+  const sureText = useCallback((confidence: number | null) => {
+    const c = confidenceInfo(confidence);
+    if (c.level === "unknown") return t("check.sure.unknown", "Not rated");
+    const word = c.level === "high" ? t("check.sure.high", "High") : c.level === "medium" ? t("check.sure.medium", "Medium") : t("check.sure.low", "Low");
+    return `${word} · ${c.pct}% ${t("check.sure.suffix", "sure")}`;
+  }, [t]);
 
   const categoryTabs: CategoryTab[] = useMemo(() => [
     {
       key: "low_confidence",
-      label: t("workbench.tab.needs_review", "Needs Review"),
-      description: t("workbench.tab.needs_review_desc", "Extracted fields waiting on a human decision, worst-confidence first. Margin notes, join mismatches and continuation questions each have their own tab."),
-      available: true,
+      label: t("check.tab.unsure", "Unsure values"),
+      description: t("check.tab.unsure_desc", "Values the computer read but isn't sure about. The least sure are at the top."),
     },
     {
       key: "handwritten",
-      label: t("workbench.tab.handwritten", "Handwritten"),
-      description: t("workbench.tab.handwritten_desc", 'Fields the system read from handwriting rather than print. Excludes margin notes — see "Marginalia".'),
-      available: true,
+      label: t("check.tab.handwritten", "Handwritten"),
+      description: t("check.tab.handwritten_desc", "Values read from handwriting, which the computer gets wrong more often than print."),
     },
     {
       key: "marginalia",
-      label: t("workbench.tab.marginalia", "Marginalia"),
-      description: t("workbench.tab.marginalia_desc", "Handwritten notes found outside any known field on the page (margin notes, stamps, annotations)."),
-      available: true,
+      label: t("check.tab.margin", "Notes in the margin"),
+      description: t("check.tab.margin_desc", "Handwritten notes, stamps or remarks found outside the table, usually in the margins."),
     },
     {
       key: "join_mismatch",
-      label: t("workbench.tab.join_mismatches", "Join Mismatches"),
-      description: t("workbench.tab.join_mismatches_desc", "A two-page entry the system couldn't reliably match left-to-right — needs a human to pair the halves."),
-      available: true,
+      label: t("check.tab.join", "Rows that didn't line up"),
+      description: t("check.tab.join_desc", "Registers printed across two facing pages, where the computer couldn't match a left-page row with its right-page half."),
     },
     {
       key: "stitch_ambiguous",
-      label: t("workbench.tab.continuation_unclear", "Continuation Unclear"),
-      description: t("workbench.tab.continuation_unclear_desc", "A page pair the system couldn't confidently classify as the same table continuing, a side-by-side spread, or unrelated. Your answer here applies automatically to every future document with this same page shape."),
-      available: true,
+      label: t("check.tab.stitch", "Table continues on next page?"),
+      description: t("check.tab.stitch_desc", "The computer couldn't tell if a table carries on onto the next page. Your answer is remembered for every future document laid out the same way."),
     },
   ], [t]);
-  // Below `lg` the queue and the review panel stack into one column, so
-  // picking a row leaves the panel off-screen below it — a mouse user
-  // notices the highlighted row and scrolls, but on a tablet that's an easy
-  // miss. Scroll it into view, but only in that stacked layout: on desktop
-  // it's already visible beside the queue, so jumping there would be an
-  // unwanted scroll on every click.
+
+  // Below `lg` the list and the detail panel stack into one column, so
+  // picking an item leaves the panel off-screen -- scroll it into view there
+  // (on desktop it's already beside the list).
   const selectedCardRef = useRef<HTMLDivElement>(null);
   const selectFact = (idx: number) => {
     setSelectedIndex(idx);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches) {
       selectedCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  };
-
-  const [bulkFolderId, setBulkFolderId] = useState("");
-  const [bulkFolders, setBulkFolders] = useState<{ id: string; name: string; depth: number }[] | null>(null);
-  const [bulkFoldersLoading, setBulkFoldersLoading] = useState(false);
-  const [showBulkFolderPicker, setShowBulkFolderPicker] = useState(false);
-
-  const openBulkFolderPicker = async () => {
-    setShowBulkFolderPicker((v) => !v);
-    if (bulkFolders) return;
-    setBulkFoldersLoading(true);
-    try {
-      const tree = await api.folders.getTree();
-      setBulkFolders(flattenFolders(tree));
-    } catch (e: any) {
-      setError(e?.message || "Failed to load folders");
-    } finally {
-      setBulkFoldersLoading(false);
-    }
-  };
-  const [bulkThreshold, setBulkThreshold] = useState("0.8");
-  const [bulkPolicyVersion, setBulkPolicyVersion] = useState("");
-  const [bulkLoading, setBulkLoading] = useState(false);
-  const [bulkResult, setBulkResult] = useState<{ confirmed_count: number; batch_id: string } | null>(null);
-
-  // T59 — previously the only way to learn a folder wasn't calibrated was
-  // to submit Bulk Confirm and get a 409 back. Look it up as soon as a
-  // folder is chosen so the gate is visible before the submit attempt.
-  const [calibrationStatus, setCalibrationStatus] = useState<{ calibrated: boolean; calibrated_at?: string | null; sample_size?: number | null } | null>(null);
-  const [calibrationLoading, setCalibrationLoading] = useState(false);
-  const [calibrateActionLoading, setCalibrateActionLoading] = useState(false);
-
-  useEffect(() => {
-    const folderId = bulkFolderId.trim();
-    if (!folderId) {
-      setCalibrationStatus(null);
-      return;
-    }
-    let cancelled = false;
-    setCalibrationLoading(true);
-    // Debounced — bulkFolderId updates on every keystroke when typed
-    // directly rather than picked via Browse.
-    const timer = setTimeout(() => {
-      api.governance
-        .getCalibrationStatus(folderId)
-        .then((status) => !cancelled && setCalibrationStatus(status))
-        .catch(() => !cancelled && setCalibrationStatus(null))
-        .finally(() => !cancelled && setCalibrationLoading(false));
-    }, 400);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [bulkFolderId]);
-
-  const calibrateThisFolder = async () => {
-    const folderId = bulkFolderId.trim();
-    if (!folderId) return;
-    setCalibrateActionLoading(true);
-    setError("");
-    try {
-      await api.governance.calibrateCorpus(folderId);
-      const status = await api.governance.getCalibrationStatus(folderId);
-      setCalibrationStatus(status);
-      setNotice("Folder calibrated — Bulk Confirm is now unlocked for it.");
-    } catch (e: any) {
-      setError(e?.message || "Failed to calibrate this folder");
-    } finally {
-      setCalibrateActionLoading(false);
-    }
-  };
-
-  // T80 — bulk edit: select rows, preview the change, then apply. One
-  // typed value replaces every selected row's value — the common case
-  // this is for (the same OCR misread recurring across many rows).
-  const [selectedFactIds, setSelectedFactIds] = useState<Set<string>>(new Set());
-  const [editValue, setEditValue] = useState("");
-  const [editLoading, setEditLoading] = useState(false);
-  const [editPreview, setEditPreview] = useState<{ changed_count: number; total: number; rows: any[] } | null>(null);
-  const [editResult, setEditResult] = useState<{ batch_id: string; changed_count: number } | null>(null);
-
-  const toggleFactSelection = (factId: string) => {
-    setSelectedFactIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(factId)) next.delete(factId);
-      else next.add(factId);
-      return next;
-    });
-    setEditPreview(null);
-    setEditResult(null);
-  };
-
-  const buildEdits = () => Array.from(selectedFactIds).map((fact_id) => ({
-    fact_id,
-    new_value: { v: editValue },
-    // A value someone changed since this queue loaded is refused (409), not overwritten.
-    expected_version: facts.find((f) => f.fact_id === fact_id)?.edit_version,
-  }));
-
-  const previewBulkEdit = async () => {
-    if (selectedFactIds.size === 0 || !editValue.trim()) return;
-    setEditLoading(true);
-    setError("");
-    try {
-      const result = await api.facts.bulkEdit(buildEdits(), true);
-      setEditPreview(result);
-    } catch (e: any) {
-      setError(e?.message || "Failed to preview the bulk edit");
-    } finally {
-      setEditLoading(false);
-    }
-  };
-
-  const applyBulkEdit = async () => {
-    if (selectedFactIds.size === 0 || !editValue.trim()) return;
-    setEditLoading(true);
-    setError("");
-    try {
-      const result = await api.facts.bulkEdit(buildEdits(), false);
-      setEditResult(result);
-      setEditPreview(null);
-      setSelectedFactIds(new Set());
-      setEditValue("");
-      await loadQueue(category);
-    } catch (e: any) {
-      setError(e?.message || "Bulk edit failed");
-    } finally {
-      setEditLoading(false);
-    }
-  };
-
-  const undoBulkEdit = async () => {
-    if (!editResult) return;
-    setEditLoading(true);
-    setError("");
-    try {
-      await api.facts.revertBulkEdit(editResult.batch_id);
-      setNotice(`Reverted bulk edit batch ${editResult.batch_id.slice(0, 8)}…`);
-      setEditResult(null);
-      await loadQueue(category);
-    } catch (e: any) {
-      setError(e?.message || "Failed to revert the bulk edit");
-    } finally {
-      setEditLoading(false);
     }
   };
 
@@ -311,7 +157,7 @@ function QueueWorkbench() {
       setSelectedIndex(0);
       setCategoryCounts((prev) => ({ ...prev, [cat]: data.total || 0 }));
     } catch (e: any) {
-      setError(e?.message || "Failed to load the adjudication queue");
+      setError(e?.message || "Could not load the list");
     } finally {
       setLoading(false);
     }
@@ -321,9 +167,7 @@ function QueueWorkbench() {
     loadQueue(category);
   }, [category, loadQueue]);
 
-  // Tabs previously gave no sense of how many items were in each queue
-  // until you actually clicked into it. One cheap (limit=1, only the
-  // count matters) call per category, once, so every tab shows a real
+  // One cheap call per tab (only the count matters) so every tab shows its
   // number up front.
   useEffect(() => {
     categoryTabs.forEach((tab) => {
@@ -337,7 +181,6 @@ function QueueWorkbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-
   const selected = facts[selectedIndex] || null;
 
   const doAction = async (action: "claim" | "release" | "confirm" | "mark_handwritten") => {
@@ -350,25 +193,22 @@ function QueueWorkbench() {
       if (action === "release") await api.facts.release(selected.fact_id);
       if (action === "confirm") {
         await api.facts.confirm(selected.fact_id, selected.edit_version);
-        setNotice(`Confirmed "${selected.field_name}" — removed from queue.`);
+        setNotice(t("check.done.correct", "Marked as correct. It has been removed from this list."));
       }
       if (action === "mark_handwritten") {
         await api.facts.markHandwritten(selected.fact_id);
-        setNotice(`Marked "${selected.field_name}" as handwritten — moved to the Handwritten queue.`);
+        setNotice(t("check.done.handwritten", "Marked as handwritten. It is now under the Handwritten tab."));
       }
       await loadQueue(category);
     } catch (e: any) {
-      setError(e?.message || `Failed to ${action.replace("_", " ")} this fact`);
+      setError(e?.message || "That didn't work. Please try again.");
     } finally {
       setActionLoading(false);
     }
   };
 
-  // TS4 — answer a stitch-ambiguity item. Deliberately its own action, not
-  // routed through doAction("confirm"): the generic Confirm endpoint would
-  // mark the fact verified without ever recording which relation it was,
-  // leaving the underlying ambiguity to resurface unresolved on every
-  // future document sharing this page shape.
+  // A "does the table continue?" item gets its own answer, not a plain
+  // confirm: the answer itself is what gets remembered for future documents.
   const resolveAmbiguity = async (relation: "vertical" | "horizontal" | "unrelated") => {
     if (!selected || !canReview) return;
     setActionLoading(true);
@@ -376,25 +216,21 @@ function QueueWorkbench() {
     setNotice("");
     try {
       await api.facts.resolveStitchAmbiguity(selected.fact_id, relation);
-      const relationLabel = relation === "vertical" ? "same table continuing" : relation === "horizontal" ? "a side-by-side spread" : "unrelated tables";
-      setNotice(`Recorded as ${relationLabel} — applies to every future document with this page shape.`);
+      setNotice(t("check.done.stitch", "Answer saved. It will be used for future documents laid out the same way."));
       await loadQueue(category);
     } catch (e: any) {
-      setError(e?.message || "Failed to resolve this continuation");
+      setError(e?.message || "That didn't work. Please try again.");
     } finally {
       setActionLoading(false);
     }
   };
 
-  // T54 — keyboard-first navigation: ↑/↓ move the selection, 'c' claims,
-  // 'r' releases, Enter or 'a' confirms the selected fact. Ignored while
-  // a text input has focus so typing into the bulk-confirm form doesn't
-  // fight with queue navigation.
+  // Keyboard: arrows move, O shows it on the page, C takes/leaves it,
+  // Enter/A marks correct, H marks handwritten. Ignored while typing.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
-
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setSelectedIndex((i) => Math.min(i + 1, facts.length - 1));
@@ -404,16 +240,10 @@ function QueueWorkbench() {
       } else if ((e.key === "o" || e.key === "O") && facts[selectedIndex]) {
         router.push(openInDocumentHref(facts[selectedIndex]));
       } else if (!canReview) {
-        // Read-only roles: navigation only, no review shortcuts.
         return;
       } else if (e.key === "c" || e.key === "C") {
-        doAction("claim");
-      } else if (e.key === "r" || e.key === "R") {
-        doAction("release");
+        doAction(facts[selectedIndex]?.claimed_by_actor_id ? "release" : "claim");
       } else if (category === "stitch_ambiguous") {
-        // This queue's confirm/handwritten shortcuts don't apply — its
-        // review action is resolveAmbiguity(), which has no natural
-        // single-key shortcut of its own (three choices, not one).
         return;
       } else if (e.key === "Enter" || e.key === "a" || e.key === "A") {
         doAction("confirm");
@@ -426,29 +256,14 @@ function QueueWorkbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facts, selectedIndex, category, canReview]);
 
-  const submitBulkConfirm = async () => {
-    if (!bulkFolderId.trim() || !bulkPolicyVersion.trim()) {
-      setError("Bulk confirm needs a corpus folder ID and a policy version.");
-      return;
-    }
-    setBulkLoading(true);
-    setError("");
-    setBulkResult(null);
-    try {
-      const result = await api.facts.bulkConfirm(bulkFolderId.trim(), parseFloat(bulkThreshold), bulkPolicyVersion.trim());
-      setBulkResult(result);
-      await loadQueue(category);
-    } catch (e: any) {
-      setError(e?.message || "Bulk confirm failed");
-    } finally {
-      setBulkLoading(false);
-    }
-  };
+  const activeTab = categoryTabs.find((tab) => tab.key === category);
+  const claimedByMe = !!selected?.claimed_by_actor_id && selected.claimed_by_actor_id === currentUserId;
+  const claimedByOther = !!selected?.claimed_by_actor_id && selected.claimed_by_actor_id !== currentUserId;
 
   return (
     <div className="h-screen overflow-y-auto bg-[#f8f9fa] text-[#1f1f1f]">
-      <header className="min-h-16 px-3 sm:px-6 py-2 flex items-center justify-between gap-2 border-b border-[#e1e3e1]/60 bg-white/80 backdrop-blur-md sticky top-0 z-20">
-        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+      <header className="min-h-16 px-3 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-2 border-b border-[#e1e3e1]/60 bg-white/80 backdrop-blur-md sticky top-0 z-20">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
           <Link
             href="/drive"
             className="flex items-center gap-2 text-sm text-[#444746] hover:text-[#1f1f1f] transition-colors px-2 sm:px-3 py-1.5 rounded-lg hover:bg-[#f0f4f9] shrink-0"
@@ -458,24 +273,54 @@ function QueueWorkbench() {
           </Link>
           <div className="h-5 w-px bg-[#e1e3e1] hidden sm:block" />
           <h1 className="text-base sm:text-lg font-bold text-[#1f1f1f] flex items-center gap-2 truncate">
-            <ShieldCheck className="w-5 h-5 text-[#0d2e5c] shrink-0" />
-            <span className="truncate">{t("workbench.title", "Verification Workbench")}</span>
+            <ShieldCheck className="w-5 h-5 text-[#0d2e5c] shrink-0" aria-hidden="true" />
+            <span className="truncate">{t("check.title", "Check extracted data")}</span>
           </h1>
           <WorkbenchTabs active="queue" />
         </div>
-        {/* Keyboard shortcuts only mean something to a keyboard/mouse user —
-            hidden below lg, the same breakpoint the layout stacks at for
-            touch-oriented tablet/mobile use, where these hints just took up
-            space and pushed the header into two lines. */}
-        <div className="hidden lg:flex items-center gap-1.5 text-xs text-[#5f6368] shrink-0">
-          <Keyboard className="w-4 h-4" />
-          <span>{canReview ? <>&uarr;/&darr; navigate &middot; O open in document &middot; C claim &middot; R release &middot; Enter/A confirm &middot; H mark handwritten</> : <>&uarr;/&darr; navigate &middot; O open in document</>}</span>
+        <div className="relative hidden lg:block">
+          <button
+            type="button"
+            aria-expanded={showShortcuts}
+            onClick={() => setShowShortcuts((v) => !v)}
+            className="flex items-center gap-1.5 text-xs text-[#444746] px-2.5 py-1.5 rounded-lg hover:bg-[#f0f4f9]"
+          >
+            <Keyboard className="w-4 h-4" aria-hidden="true" /> {t("check.shortcuts", "Keyboard shortcuts")}
+          </button>
+          {showShortcuts && (
+            <div className="absolute right-0 mt-1 w-72 rounded-xl border border-[#e1e3e1] bg-white shadow-lg p-3 text-xs z-30">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+                <dt className="font-mono font-bold">&uarr; &darr;</dt><dd>{t("check.key.move", "Move up and down the list")}</dd>
+                <dt className="font-mono font-bold">O</dt><dd>{t("check.key.open", "Show it on the page")}</dd>
+                {canReview && <>
+                  <dt className="font-mono font-bold">Enter</dt><dd>{t("check.key.correct", "Mark as correct")}</dd>
+                  <dt className="font-mono font-bold">H</dt><dd>{t("check.key.handwritten", "Mark as handwritten")}</dd>
+                  <dt className="font-mono font-bold">C</dt><dd>{t("check.key.claim", "Tell others you're checking it")}</dd>
+                </>}
+              </dl>
+            </div>
+          )}
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-6 grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4 sm:gap-6">
         <div className="min-w-0">
-          <div role="tablist" aria-label="Adjudication queues" className="flex flex-wrap gap-2 mb-2">
+          {showGuide && (
+            <section aria-label={t("check.guide.title", "How this works")} className="mb-4 relative rounded-2xl border border-[#c2d6f5] bg-[#f3f7fd] p-4 pr-10">
+              <h2 className="text-sm font-bold text-[#0d2e5c] mb-2">{t("check.guide.title", "How this works")}</h2>
+              <ol className="list-decimal pl-5 space-y-1 text-sm text-[#1f1f1f]">
+                <li>{t("check.guide.1", "The computer read these values from scanned pages but isn't sure it read them right.")}</li>
+                <li>{t("check.guide.2", "Pick one, then press “Show on page” to compare it with the original scan.")}</li>
+                <li>{t("check.guide.3", "If it's right, press “Correct”. If it's wrong, fix it on the page view.")}</li>
+              </ol>
+              <button type="button" onClick={dismissGuide} aria-label={t("check.guide.hide", "Hide this help")}
+                className="absolute top-3 right-3 p-1 rounded hover:bg-white/70 text-[#444746]">
+                <X className="w-4 h-4" />
+              </button>
+            </section>
+          )}
+
+          <div role="tablist" aria-label={t("check.tabs_label", "What to check")} className="flex flex-wrap gap-2 mb-2">
             {categoryTabs.map((tab) => (
               <button
                 key={tab.key}
@@ -484,22 +329,18 @@ function QueueWorkbench() {
                 aria-selected={category === tab.key}
                 aria-controls="queue-panel"
                 tabIndex={category === tab.key ? 0 : -1}
-                disabled={!tab.available}
-                onClick={() => tab.available && setCategory(tab.key as Category)}
-                title={tab.description}
+                onClick={() => setCategory(tab.key)}
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold border transition-colors ${
                   category === tab.key
                     ? "bg-[#0d2e5c] text-white border-[#0d2e5c]"
-                    : tab.available
-                    ? "bg-white text-[#444746] border-[#e1e3e1] hover:border-[#0d2e5c]"
-                    : "bg-[#f0f4f9] text-[#9aa0a6] border-[#e1e3e1] cursor-not-allowed"
+                    : "bg-white text-[#444746] border-[#e1e3e1] hover:border-[#0d2e5c]"
                 }`}
               >
                 {tab.label}
                 <span
-                  aria-label={`${categoryCounts[tab.key] ?? 0} items`}
+                  aria-label={`${categoryCounts[tab.key] ?? 0} ${t("check.items", "items")}`}
                   className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                    category === tab.key ? "bg-white/20" : "bg-[#f0f4f9] text-[#5f6368]"
+                    category === tab.key ? "bg-white/20" : "bg-[#f0f4f9] text-[#444746]"
                   }`}
                 >
                   {categoryCounts[tab.key] ?? "…"}
@@ -507,15 +348,15 @@ function QueueWorkbench() {
               </button>
             ))}
           </div>
-          <p className="flex items-center gap-1.5 text-xs text-[#5f6368] mb-4">
-            <Info className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            {categoryTabs.find((t) => t.key === category)?.description}
+          <p className="flex items-start gap-1.5 text-sm text-[#444746] mb-4">
+            <Info className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+            {activeTab?.description}
           </p>
 
           {roleReady && !canReview && (
             <div role="status" className="mb-4 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800">
               <ShieldAlert className="w-4 h-4 shrink-0" aria-hidden="true" />
-              {t("rbac.read_only_notice", "Your role can view this queue but not review, confirm, or edit facts.")}
+              {t("check.read_only", "You can look at these values, but your role can't mark or change them.")}
             </div>
           )}
           {error && (
@@ -533,79 +374,55 @@ function QueueWorkbench() {
 
           <Card id="queue-panel" role="tabpanel" aria-labelledby={`tab-${category}`} className="bg-white border border-[#e1e3e1] p-0 overflow-hidden">
             <div className="px-5 py-3 border-b border-[#e1e3e1] flex items-center justify-between">
-              <span className="text-sm font-semibold text-[#1f1f1f]">Queue &mdash; {total} item{total === 1 ? "" : "s"}</span>
-              {loading && <Loader2 className="w-4 h-4 animate-spin text-[#0d2e5c]" aria-label="Loading queue items" />}
+              <span className="text-sm font-semibold text-[#1f1f1f]">
+                {total} {total === 1 ? t("check.item_to_check", "item to check") : t("check.items_to_check", "items to check")}
+              </span>
+              {loading && <Loader2 className="w-4 h-4 animate-spin text-[#0d2e5c]" aria-label="Loading" />}
             </div>
-            {facts.length > 0 && canReview && (
-              <div className="px-5 py-1.5 bg-[#fafbfc] border-b border-[#e1e3e1] text-[10px] text-[#444746] flex items-center gap-4">
-                <span>&#9744; check a row to include it in <b>Bulk edit</b>, below</span>
-                <span>Click a row to review it, right</span>
-              </div>
-            )}
 
             {!loading && facts.length === 0 && (
-              <div className="px-5 py-10 text-center text-sm text-[#747775]">
-                Nothing to review in this queue right now.
+              <div className="px-5 py-10 text-center text-sm text-[#444746]">
+                {t("check.empty", "Nothing to check here right now.")}
               </div>
             )}
 
             <div className="divide-y divide-[#e1e3e1]">
               {facts.map((fact, idx) => {
-                const badge = confidenceBadge(fact.confidence);
+                const c = confidenceInfo(fact.confidence);
                 const isMine = !!fact.claimed_by_actor_id && fact.claimed_by_actor_id === currentUserId;
                 const isOthers = !!fact.claimed_by_actor_id && fact.claimed_by_actor_id !== currentUserId;
                 return (
-                  <div
+                  <button
                     key={fact.fact_id}
-                    className={`w-full flex items-center gap-3 px-5 py-3 transition-colors ${
+                    type="button"
+                    onClick={() => selectFact(idx)}
+                    aria-pressed={idx === selectedIndex}
+                    className={`w-full text-left flex items-center justify-between gap-4 px-5 py-3 transition-colors ${
                       idx === selectedIndex ? "bg-[#e8f0fe]" : "hover:bg-[#f8f9fa]"
                     }`}
                   >
-                    {/* Padded wrapper, not the input, so the visible
-                        checkbox stays compact while the tap target is
-                        still finger-sized on tablet/mobile. */}
-                    {canReview && (
-                    <span className="shrink-0 -m-2 p-2">
-                      <input
-                        type="checkbox"
-                        checked={selectedFactIds.has(fact.fact_id)}
-                        onChange={() => toggleFactSelection(fact.fact_id)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="block w-4 h-4 accent-[#0d2e5c]"
-                        aria-label={`Select ${fieldLabel(fact.field_name)} for bulk edit`}
-                        title="Include in Bulk edit"
-                      />
-                    </span>
-                    )}
-                    <button
-                      onClick={() => selectFact(idx)}
-                      aria-label={`Review ${fieldLabel(fact.field_name)}, value ${formatValue(fact.value)}, confidence ${fact.confidence !== null ? (fact.confidence * 100).toFixed(0) + '%' : 'unrated'}`}
-                      aria-pressed={idx === selectedIndex}
-                      className="flex-1 min-w-0 text-left flex items-center justify-between gap-4 py-1"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-[#1f1f1f] truncate">{fieldLabel(fact.field_name)}</div>
-                        <div className="text-xs text-[#747775] truncate">{formatValue(fact.value)}</div>
-                        {fact.document_title && (
-                          <div className="flex items-center gap-1 text-[10px] text-[#444746] truncate mt-0.5">
-                            <FileText className="w-3 h-3 shrink-0" aria-hidden="true" />
-                            <span className="truncate">{fact.document_title}</span>
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {isMine && (
-                          <span title="Claimed by you" aria-label="Claimed by you"><Lock className="w-3.5 h-3.5 text-[#0d2e5c]" aria-hidden="true" /></span>
-                        )}
-                        {isOthers && (
-                          <span title="Claimed by another operator" aria-label="Claimed by another operator"><Lock className="w-3.5 h-3.5 text-[#444746]" aria-hidden="true" /></span>
-                        )}
-                        <span className={`text-xs font-mono px-1.5 py-0.5 rounded border ${badge.className}`}>
-                          {badge.text}
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-[#1f1f1f] truncate">{fieldLabel(fact.field_name)}</div>
+                      <div className="text-sm text-[#444746] truncate">{formatValue(fact.value)}</div>
+                      {fact.document_title && (
+                        <div className="flex items-center gap-1 text-[11px] text-[#444746] truncate mt-0.5">
+                          <FileText className="w-3 h-3 shrink-0" aria-hidden="true" />
+                          <span className="truncate">{fact.document_title}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {(isMine || isOthers) && (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-[#444746]">
+                          <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+                          {isMine ? t("check.claim.you", "You're checking") : t("check.claim.other", "Someone is checking")}
                         </span>
-                      </div>
-                    </button>
-                  </div>
+                      )}
+                      <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${c.className}`}>
+                        {sureText(fact.confidence)}
+                      </span>
+                    </div>
+                  </button>
                 );
               })}
             </div>
@@ -614,311 +431,106 @@ function QueueWorkbench() {
 
         <div className="space-y-6 lg:sticky lg:top-24 lg:h-[calc(100vh-7rem)] lg:overflow-y-auto pr-2 pb-6 min-w-0">
           <Card ref={selectedCardRef} className="bg-white border border-[#e1e3e1] scroll-mt-20">
-            <h2 className="text-sm font-bold text-[#1f1f1f] mb-3">{t("workbench.label.status", "Selected fact")}</h2>
             {!selected ? (
-              <p className="text-sm text-[#747775]">{t("workbench.empty_queue", "Select an item from the queue on the left to review it here.")}</p>
+              <p className="text-sm text-[#444746]">{t("check.pick_one", "Pick an item from the list to see it here.")}</p>
             ) : (
               <div className="space-y-3">
                 {selected.document_title && (
-                  <div className="flex items-center gap-1.5 text-xs text-[#5f6368]">
-                    <FileText className="w-3.5 h-3.5 shrink-0" />
+                  <div className="flex items-center gap-1.5 text-xs text-[#444746]">
+                    <FileText className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                     <span className="truncate">{selected.document_title}</span>
                   </div>
                 )}
+                <h2 className="text-base font-bold text-[#1f1f1f]">{fieldLabel(selected.field_name)}</h2>
                 {category === "stitch_ambiguous" ? (
-                  <div>
-                    <div className="text-xs text-[#747775] uppercase tracking-wide font-semibold">{t("workbench.sentinel.stitch_ambiguous", "What's unclear")}</div>
-                    <div className="text-sm text-[#1f1f1f]">
-                      Page {selected.value?.page_a ?? "?"} and page {selected.value?.page_b ?? "?"} share a similar
-                      field layout, but the system couldn&apos;t confidently tell whether page {selected.value?.page_b ?? "?"} is
-                      the same table continuing, a side-by-side spread, or an unrelated table.
-                    </div>
-                  </div>
+                  <p className="text-sm text-[#1f1f1f]">
+                    {t("check.stitch.question_a", "Does the table on page")} {selected.value?.page_a ?? "?"}{" "}
+                    {t("check.stitch.question_b", "carry on onto page")} {selected.value?.page_b ?? "?"}?
+                  </p>
                 ) : (
                   <>
                     <div>
-                      <div className="text-xs text-[#747775] uppercase tracking-wide font-semibold">{t("workbench.label.field", "Field")}</div>
-                      <div className="text-sm text-[#1f1f1f]">{fieldLabel(selected.field_name)}</div>
+                      <div className="text-xs text-[#444746] font-semibold">{t("check.read", "What the computer read")}</div>
+                      <div className="text-base text-[#1f1f1f] break-words">{formatValue(selected.value)}</div>
                     </div>
                     <div>
-                      <div className="text-xs text-[#747775] uppercase tracking-wide font-semibold">{t("workbench.label.extracted_value", "Value")}</div>
-                      <div className="text-sm text-[#1f1f1f] break-words">{formatValue(selected.value)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-[#747775] uppercase tracking-wide font-semibold">{t("workbench.label.confidence", "Confidence")}</div>
-                      <div className={`inline-block text-sm font-mono mt-0.5 px-2 py-0.5 rounded border ${confidenceBadge(selected.confidence).className}`}>
-                        {selected.confidence?.toFixed(3) ?? "—"}
-                      </div>
+                      <div className="text-xs text-[#444746] font-semibold">{t("check.how_sure", "How sure it is")}</div>
+                      <span className={`inline-block mt-0.5 text-xs font-semibold px-2 py-0.5 rounded-full border ${confidenceInfo(selected.confidence).className}`}>
+                        {sureText(selected.confidence)}
+                      </span>
                     </div>
                   </>
                 )}
                 {selected.is_handwritten && (
-                  <div className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
-                    Handwritten source — can&apos;t be included in a threshold-based Bulk Confirm; needs individual review.
+                  <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                    {t("check.is_handwritten", "This value is handwritten.")}
                   </div>
                 )}
-                {/* max-lg: below the breakpoint the layout stacks into one
-                    touch-oriented column, so these get a taller tap target
-                    (the default "sm" button is 32px — under the ~44px
-                    minimum a finger needs) without shrinking them back down
-                    on the mouse-driven two-column desktop layout. */}
-                <div className="flex flex-wrap gap-2 pt-2">
-                  {/* Every queue item opens in the full document view: its page,
-                      its source region outlined on the scan, and (for table
-                      values) its cell selected -- this replaced the small
-                      "View Source" region popup. */}
+                {claimedByOther && (
+                  <div className="text-xs text-[#444746] bg-[#f0f4f9] rounded-lg px-2.5 py-1.5">
+                    {t("check.claim.other_long", "Someone else is already checking this one. You may want to pick another.")}
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-2 pt-1">
                   <Link
                     href={openInDocumentHref(selected)}
-                    className="inline-flex items-center rounded-lg bg-[#0d2e5c] px-3 h-8 max-lg:h-11 max-lg:px-4 text-xs font-semibold text-white hover:bg-[#0945a5]"
-                    title="Open the whole document with its scan, on this item's source region (shortcut: O)"
+                    className="inline-flex items-center justify-center rounded-lg bg-[#0d2e5c] px-3 h-10 text-sm font-semibold text-white hover:bg-[#0945a5]"
+                    title={t("check.show_on_page_hint", "Opens the scanned page with this value outlined, so you can compare (key: O)")}
                   >
-                    <FileText className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
-                    Open in document
+                    <FileText className="w-4 h-4 mr-1.5" aria-hidden="true" />
+                    {t("check.show_on_page", "Show on page")}
                   </Link>
-                  {canReview && (<>
-                  <Button
-                    size="sm" className="max-lg:h-11 max-lg:px-4" variant="secondary" loading={actionLoading}
-                    onClick={() => doAction(selected.claimed_by_actor_id ? "release" : "claim")}
-                    title={selected.claimed_by_actor_id ? "Release (shortcut: R) — let another operator claim this" : "Claim (shortcut: C) — reserve this for yourself so no one else works on it at the same time"}
-                  >
-                    {selected.claimed_by_actor_id ? <Unlock className="w-3.5 h-3.5 mr-1.5" /> : <Lock className="w-3.5 h-3.5 mr-1.5" />}
-                    {selected.claimed_by_actor_id ? t("workbench.btn.release", "Release") : t("workbench.btn.claim", "Claim")}
-                  </Button>
-                  {category === "stitch_ambiguous" ? (
+                  {canReview && (category === "stitch_ambiguous" ? (
                     <>
-                      <Button
-                        size="sm" className="max-lg:h-11 max-lg:px-4" loading={actionLoading} onClick={() => resolveAmbiguity("vertical")}
-                        title="The same table continues onto the next page — rows should stitch together"
-                      >
-                        <ArrowUpDown className="w-3.5 h-3.5 mr-1.5" />
-                        Same table continues
+                      <Button size="sm" className="h-10" loading={actionLoading} onClick={() => resolveAmbiguity("vertical")}>
+                        <ArrowUpDown className="w-4 h-4 mr-1.5" aria-hidden="true" />
+                        {t("check.stitch.yes", "Yes, it's the same table")}
                       </Button>
-                      <Button
-                        size="sm" className="max-lg:h-11 max-lg:px-4" variant="secondary" loading={actionLoading} onClick={() => resolveAmbiguity("horizontal")}
-                        title="These two pages are a side-by-side spread of one wider table"
-                      >
-                        <ArrowLeftRight className="w-3.5 h-3.5 mr-1.5" />
-                        Side-by-side spread
+                      <Button size="sm" className="h-10" variant="secondary" loading={actionLoading} onClick={() => resolveAmbiguity("horizontal")}>
+                        <ArrowLeftRight className="w-4 h-4 mr-1.5" aria-hidden="true" />
+                        {t("check.stitch.side", "It's the right half of a wide table")}
                       </Button>
-                      <Button
-                        size="sm" className="max-lg:h-11 max-lg:px-4" variant="secondary" loading={actionLoading} onClick={() => resolveAmbiguity("unrelated")}
-                        title="These are two genuinely separate tables — do not stitch"
-                      >
-                        <Ban className="w-3.5 h-3.5 mr-1.5" />
-                        Unrelated
+                      <Button size="sm" className="h-10" variant="secondary" loading={actionLoading} onClick={() => resolveAmbiguity("unrelated")}>
+                        <Ban className="w-4 h-4 mr-1.5" aria-hidden="true" />
+                        {t("check.stitch.no", "No, it's a different table")}
                       </Button>
                     </>
                   ) : (
                     <>
-                      <Button
-                        size="sm" className="max-lg:h-11 max-lg:px-4" loading={actionLoading} onClick={() => doAction("confirm")}
-                        title="Confirm (shortcut: Enter/A) — marks this value as human-verified and removes it from the queue"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
-                        {t("workbench.btn.confirm", "Confirm")}
+                      <Button size="sm" className="h-10" loading={actionLoading} onClick={() => doAction("confirm")}>
+                        <CheckCircle2 className="w-4 h-4 mr-1.5" aria-hidden="true" />
+                        {t("check.correct", "Correct")}
                       </Button>
+                      <p className="text-[11px] text-[#444746] -mt-1">
+                        {t("check.correct_hint", "Only if the value matches the scan exactly. To fix a wrong value, use “Show on page”.")}
+                      </p>
                       {!selected.is_handwritten && (
-                        <Button
-                          size="sm" className="max-lg:h-11 max-lg:px-4" variant="secondary" loading={actionLoading} onClick={() => doAction("mark_handwritten")}
-                          title="Mark Handwritten (shortcut: H) — flags this as handwritten so it's excluded from threshold-based Bulk Confirm"
-                        >
-                          <PenLine className="w-3.5 h-3.5 mr-1.5" />
-                          {t("workbench.tab.handwritten", "Mark Handwritten")}
+                        <Button size="sm" className="h-10" variant="secondary" loading={actionLoading} onClick={() => doAction("mark_handwritten")}>
+                          <PenLine className="w-4 h-4 mr-1.5" aria-hidden="true" />
+                          {t("check.mark_handwritten", "This is handwritten")}
                         </Button>
                       )}
                     </>
-                  )}
-                  </>)}
-                </div>
-              </div>
-            )}
-          </Card>
-
-          {canReview && (<>
-          <Card className="bg-white border-2 border-emerald-200 relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-1 h-full bg-emerald-400" />
-            <h2 className="text-sm font-bold text-[#1f1f1f] mb-1 flex items-center gap-1.5">
-              <Layers className="w-4 h-4 text-emerald-600" />
-              Confirm an entire folder at once
-            </h2>
-            <p className="text-xs text-[#747775] mb-3">
-              Acts on <b>every field above the threshold in one folder</b> — not on anything checked in the queue
-              to the left. The folder must be corpus-calibrated first, or this will be refused. Handwritten
-              fields are always excluded, no matter how confident.
-            </p>
-            <div className="space-y-2">
-              <p className="text-[11px] text-[#747775] -mt-1">
-                Don&apos;t have a folder ID? Click <b>Browse</b> to pick a folder by name instead.
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  aria-label="Corpus folder ID"
-                  placeholder="Click Browse to pick a folder — or paste a folder ID here"
-                  value={bulkFolderId}
-                  onChange={(e) => setBulkFolderId(e.target.value)}
-                  className="flex-1 text-sm px-3 py-2 rounded-lg border border-[#e1e3e1] focus:outline-none focus:ring-2 focus:ring-[#0d2e5c]/40"
-                />
-                <Button variant="secondary" size="sm" loading={bulkFoldersLoading} onClick={openBulkFolderPicker}>
-                  Browse
-                </Button>
-              </div>
-              {showBulkFolderPicker && bulkFolders && (
-                <div className="max-h-48 overflow-y-auto flex flex-col gap-1 border border-[#e1e3e1] rounded-lg p-2">
-                  {bulkFolders.length === 0 && <p className="text-sm text-[#747775]">No folders found.</p>}
-                  {bulkFolders.map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => {
-                        setBulkFolderId(f.id);
-                        setShowBulkFolderPicker(false);
-                      }}
-                      style={{ paddingLeft: `${8 + f.depth * 16}px` }}
-                      className="text-left text-sm py-1 pr-3 rounded hover:bg-[#f0f4f9]"
-                    >
-                      {f.name}
-                    </button>
                   ))}
-                </div>
-              )}
-              {/* T59 — previously this state was invisible until Confirm
-                  Folder was clicked and a 409 came back. */}
-              {bulkFolderId.trim() && (
-                calibrationLoading ? (
-                  <div className="flex items-center gap-1.5 text-xs text-[#444746]">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking calibration status…
-                  </div>
-                ) : calibrationStatus?.calibrated ? (
-                  <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                    Calibrated{calibrationStatus.sample_size ? ` — sample of ${calibrationStatus.sample_size}` : ""}
-                    {calibrationStatus.calibrated_at ? `, ${new Date(calibrationStatus.calibrated_at).toLocaleDateString()}` : ""}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
-                    <span className="flex items-center gap-1.5">
-                      <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-                      Not calibrated — Confirm Folder will be refused until a human certifies this corpus.
-                    </span>
-                    {canCalibrate && (
+                  {canReview && !claimedByOther && (
                     <button
-                      onClick={calibrateThisFolder}
-                      disabled={calibrateActionLoading}
-                      className="shrink-0 font-bold text-amber-800 hover:underline disabled:opacity-50"
+                      type="button"
+                      disabled={actionLoading}
+                      onClick={() => doAction(claimedByMe ? "release" : "claim")}
+                      className="inline-flex items-center justify-center gap-1.5 text-xs text-[#0d2e5c] hover:underline disabled:opacity-40 py-1"
+                      title={t("check.claim_hint", "Lets other reviewers know you're working on this, so they skip it")}
                     >
-                      {calibrateActionLoading ? "Calibrating…" : "Calibrate now"}
+                      {claimedByMe ? <Unlock className="w-3.5 h-3.5" aria-hidden="true" /> : <Lock className="w-3.5 h-3.5" aria-hidden="true" />}
+                      {claimedByMe ? t("check.release", "I've stopped checking this") : t("check.claim", "I'm checking this (others will skip it)")}
                     </button>
-                    )}
-                  </div>
-                )
-              )}
-              <div>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max="1"
-                  aria-label="Confidence threshold, 0 to 1"
-                  placeholder="Only confirm above this confidence, e.g. 0.8"
-                  value={bulkThreshold}
-                  onChange={(e) => setBulkThreshold(e.target.value)}
-                  className="w-full text-sm px-3 py-2 rounded-lg border border-[#e1e3e1] focus:outline-none focus:ring-2 focus:ring-[#0d2e5c]/40"
-                />
-              </div>
-              <div>
-                <input
-                  type="text"
-                  aria-label="Policy version label"
-                  placeholder="Label this decision, e.g. Q1-2026-review"
-                  value={bulkPolicyVersion}
-                  onChange={(e) => setBulkPolicyVersion(e.target.value)}
-                  className="w-full text-sm px-3 py-2 rounded-lg border border-[#e1e3e1] focus:outline-none focus:ring-2 focus:ring-[#0d2e5c]/40"
-                />
-                <p className="text-[10px] text-[#444746] mt-1">A short name for this batch, so it can be found and reverted later if needed.</p>
-              </div>
-              <Button size="sm" className="w-full bg-emerald-600 hover:bg-emerald-700" loading={bulkLoading} onClick={submitBulkConfirm}>
-                <Layers className="w-3.5 h-3.5 mr-1.5" />
-                Confirm Folder
-              </Button>
-            </div>
-            {bulkResult && (
-              <div className="mt-3 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-                Confirmed {bulkResult.confirmed_count} fact{bulkResult.confirmed_count === 1 ? "" : "s"} — batch {bulkResult.batch_id.slice(0, 8)}&hellip;
-              </div>
-            )}
-          </Card>
-
-          <Card className="bg-white border-2 border-amber-200 relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-1 h-full bg-amber-400" />
-            <h2 className="text-sm font-bold text-[#1f1f1f] mb-1 flex items-center gap-1.5">
-              <SlidersHorizontal className="w-4 h-4 text-amber-600" />
-              Fix a shared mistake across checked rows
-            </h2>
-            <p className="text-xs text-[#747775] mb-3">
-              Acts on <b>whatever&apos;s checked in the queue</b> to the left — the same one typo/misread corrected
-              everywhere at once. Always requires re-review afterward; this never marks a value verified on its own.
-            </p>
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-[#444746]">
-                {selectedFactIds.size} row{selectedFactIds.size === 1 ? "" : "s"} selected
-              </div>
-              <input
-                type="text"
-                aria-label="Corrected value for selected rows"
-                placeholder="Corrected value"
-                value={editValue}
-                onChange={(e) => { setEditValue(e.target.value); setEditPreview(null); }}
-                disabled={selectedFactIds.size === 0}
-                className="w-full text-sm px-3 py-2 rounded-lg border border-[#e1e3e1] focus:outline-none focus:ring-2 focus:ring-[#0d2e5c]/40 disabled:opacity-50"
-              />
-              <div className="flex gap-2">
-                <Button
-                  size="sm" variant="secondary" className="flex-1"
-                  loading={editLoading} disabled={selectedFactIds.size === 0 || !editValue.trim()}
-                  onClick={previewBulkEdit}
-                >
-                  <Eye className="w-3.5 h-3.5 mr-1.5" />
-                  Preview
-                </Button>
-                <Button
-                  size="sm" className="flex-1"
-                  loading={editLoading} disabled={!editPreview || editPreview.changed_count === 0}
-                  onClick={applyBulkEdit}
-                >
-                  <Pencil className="w-3.5 h-3.5 mr-1.5" />
-                  Apply
-                </Button>
-              </div>
-            </div>
-
-            {editPreview && (
-              <div className="mt-3 text-xs bg-[#f0f4f9] border border-[#e1e3e1] rounded-lg px-3 py-2 space-y-1 max-h-40 overflow-y-auto">
-                <div className="font-semibold text-[#444746]">
-                  {editPreview.changed_count} of {editPreview.total} row{editPreview.total === 1 ? "" : "s"} will change
+                  )}
                 </div>
-                {editPreview.rows.filter((r: any) => r.changed).map((r: any) => (
-                  <div key={r.fact_id} className="text-[#1f1f1f]">
-                    {fieldLabel(r.field_name)}: {formatValue(r.previous_value)} &rarr; {formatValue(r.new_value)}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {editResult && (
-              <div className="mt-3 flex items-center justify-between gap-2 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-                <span>
-                  Edited {editResult.changed_count} fact{editResult.changed_count === 1 ? "" : "s"} — batch {editResult.batch_id.slice(0, 8)}&hellip;
-                </span>
-                <button onClick={undoBulkEdit} className="flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline shrink-0">
-                  <Undo2 className="w-3.5 h-3.5" /> Undo
-                </button>
               </div>
             )}
           </Card>
-          </>)}
         </div>
       </main>
-
     </div>
   );
 }
@@ -941,7 +553,7 @@ function WorkbenchRouter() {
         focusFactId={params.get("fact")}
         showQueueItem={fromQueue && !!params.get("fact")}
         backHref={fromQueue ? "/workbench" : "/workbench?tab=documents"}
-        backLabel={fromQueue ? "Back to queue" : "Back to documents"}
+        backLabel={fromQueue ? "Back to the list" : "Back to documents"}
       />
     );
   }

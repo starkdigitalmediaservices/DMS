@@ -4,6 +4,9 @@ import { CheckCircle2, CircleDashed, History, Plus, RotateCcw, Trash2, AlertTria
 import type { ReviewBlock, ReviewCell, ReviewRow } from "@/types";
 import type { FocusTarget } from "./ScanViewer";
 import { BLOCK_TYPE_STYLE, STATUS_CHIP, STATUS_LABEL } from "./reviewStyles";
+import { humanFieldName } from "@/lib/fieldLabels";
+
+const TYPE_LABEL: Record<ReviewBlock["type"], string> = { heading: "Heading", paragraph: "Text", table: "Table", image: "Picture" };
 
 export type ReviewFilter = "all" | "low_confidence" | "flagged" | "unverified";
 
@@ -116,7 +119,7 @@ export function CellEditor({ initial, label, onCommit, onCancel, onTab }: {
 function CellView({ cell }: { cell: ReviewCell }) {
   return (
     <span className="whitespace-pre-wrap break-words">
-      {cell.text || <span className="text-[#5f6368] italic">empty</span>}
+      {cell.text || <span className="text-[#5f6368] italic">blank</span>}
     </span>
   );
 }
@@ -160,7 +163,7 @@ const TableRow = memo(function TableRow({
     >
       <td className="px-1 py-1.5 text-[11px] text-[#5f6368]">
         <button type="button" className="hover:underline font-semibold text-[#0d2e5c]"
-          title={`Open row ${rowIdx + 1} as a field list${row.page ? ` (from page ${row.page})` : " (added row)"}`}
+          title={`Show row ${rowIdx + 1} as a list${row.page ? ` (from page ${row.page})` : " (added row)"}`}
           aria-label={`Open row ${rowIdx + 1} details`}
           onClick={() => {
             onSelect({ blockId: block.id, rowId: row.id });
@@ -187,7 +190,7 @@ const TableRow = memo(function TableRow({
             {isEditing ? (
               <CellEditor
                 initial={cell.text}
-                label={`Edit ${headers[col] || `column ${col + 1}`}, row ${rowIdx + 1}`}
+                label={`Edit ${humanFieldName(headers[col] || "") || `column ${col + 1}`}, row ${rowIdx + 1}`}
                 onCancel={() => setEditing(null)}
                 onCommit={async (v) => {
                   setEditing(null);
@@ -203,7 +206,7 @@ const TableRow = memo(function TableRow({
               <button
                 type="button"
                 onClick={() => openCell(row, col)}
-                title={cell.low_confidence ? `Low confidence (${Math.round((cell.confidence || 0) * 100)}%)` : undefined}
+                title={cell.low_confidence ? `The computer is unsure about this (${Math.round((cell.confidence || 0) * 100)}% sure)` : undefined}
                 className={`w-full text-left ${editMode && !row.deleted ? "cursor-text" : "cursor-pointer"}`}
               >
                 <CellView cell={cell} />
@@ -211,12 +214,12 @@ const TableRow = memo(function TableRow({
             )}
             {!isEditing && (cell.edited || cell.low_confidence || cell.history_count > 0) && (
               <div className="mt-0.5 flex flex-wrap items-center gap-1">
-                {cell.edited && <span className="text-[9px] font-bold uppercase text-amber-800 bg-amber-100 px-1 rounded">edited</span>}
+                {cell.edited && <span className="text-[9px] font-bold uppercase text-amber-800 bg-amber-100 px-1 rounded">corrected</span>}
                 {cell.low_confidence && !cell.edited && (
-                  <span className="inline-flex items-center gap-0.5 text-[9px] text-orange-800"><AlertTriangle className="w-2.5 h-2.5" aria-hidden="true" />low</span>
+                  <span className="inline-flex items-center gap-0.5 text-[9px] text-orange-800"><AlertTriangle className="w-2.5 h-2.5" aria-hidden="true" />unsure</span>
                 )}
                 {cell.edited && cell.revertable && editMode && (
-                  <button type="button" disabled={busy} title={`Undo — original OCR: "${cell.original}"`}
+                  <button type="button" disabled={busy} title={`Undo — put back what the computer read: "${cell.original}"`}
                     aria-label={`Undo edit, restore original OCR value ${cell.original}`}
                     onClick={() => actions.revert({ block_id: block.id, row_id: row.id, col })}
                     className="text-amber-800 hover:text-amber-950 disabled:opacity-40">
@@ -224,11 +227,11 @@ const TableRow = memo(function TableRow({
                   </button>
                 )}
                 {cell.edited && cell.changed_elsewhere && (
-                  <span className="text-[9px] text-[#5f6368]" title={`Original OCR: "${cell.original}"`}>changed in Workbench</span>
+                  <span className="text-[9px] text-[#5f6368]" title={`Original OCR: "${cell.original}"`}>changed elsewhere</span>
                 )}
                 {cell.history_count > 0 && (
-                  <button type="button" aria-label="Show change history for this cell" title="Change history"
-                    onClick={() => actions.showHistory({ block_id: block.id, row_id: row.id, col, label: `${headers[col]}, row ${rowIdx + 1}` })}
+                  <button type="button" aria-label="Show change history for this cell" title="Who changed this, and when"
+                    onClick={() => actions.showHistory({ block_id: block.id, row_id: row.id, col, label: `${humanFieldName(headers[col] || "")}, row ${rowIdx + 1}` })}
                     className="text-[#5f6368] hover:text-[#1f1f1f]">
                     <History className="w-3 h-3" />
                   </button>
@@ -249,8 +252,8 @@ const TableRow = memo(function TableRow({
           ) : (
             <>
               {canVerify && editMode && (
-                <button type="button" disabled={busy} aria-label={row.status === "VERIFIED" ? "Mark row unverified" : "Mark row verified"}
-                  title={row.status === "VERIFIED" ? "Unverify row" : "Verify row"}
+                <button type="button" disabled={busy} aria-label={row.status === "VERIFIED" ? "Remove the checked mark from this row" : "Mark this row as checked"}
+                  title={row.status === "VERIFIED" ? "Remove the checked mark" : "Mark this row as checked"}
                   onClick={() => actions.verifyRow(block, row, row.status !== "VERIFIED")}
                   className="p-1 rounded hover:bg-green-50 text-green-700 disabled:opacity-40">
                   {row.status === "VERIFIED" ? <CircleDashed className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
@@ -258,18 +261,18 @@ const TableRow = memo(function TableRow({
               )}
               {editMode && (
                 <>
-                  <button type="button" disabled={busy} aria-label="Insert row below" title="Insert row below"
+                  <button type="button" disabled={busy} aria-label="Add a missing row below" title="Add a missing row below"
                     onClick={() => actions.addRow(block, row.id)} className="p-1 rounded hover:bg-[#f0f4f9] disabled:opacity-40">
                     <Plus className="w-3.5 h-3.5" />
                   </button>
-                  <button type="button" disabled={busy} aria-label="Delete row" title="Delete row"
+                  <button type="button" disabled={busy} aria-label="Remove this row" title="Remove this row (it can be put back)"
                     onClick={() => actions.deleteRow(block, row)} className="p-1 rounded hover:bg-red-50 text-red-700 disabled:opacity-40">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </>
               )}
               {row.history_count > 0 && (
-                <button type="button" aria-label="Row history" title="Row history"
+                <button type="button" aria-label="Row history" title="Who changed this row, and when"
                   onClick={() => actions.showHistory({ block_id: block.id, row_id: row.id, label: `row ${rowIdx + 1}` })}
                   className="p-1 rounded hover:bg-[#f0f4f9]">
                   <History className="w-3.5 h-3.5" />
@@ -321,7 +324,7 @@ function TableBody({ block, editMode, canVerify, busy, filter, selected, onSelec
           <tr>
             <th scope="col" className="w-8 px-1 py-1.5 text-[11px] text-[#5f6368] font-semibold text-left border-b border-[#e1e3e1]">#</th>
             {headers.map((h) => (
-              <th key={h} scope="col" className="px-2 py-1.5 text-[11px] text-[#5f6368] font-semibold text-left border-b border-[#e1e3e1] whitespace-nowrap">{h}</th>
+              <th key={h} scope="col" className="px-2 py-1.5 text-[11px] text-[#5f6368] font-semibold text-left border-b border-[#e1e3e1] whitespace-nowrap">{humanFieldName(h)}</th>
             ))}
             <th scope="col" className="w-28 px-1 py-1.5 border-b border-[#e1e3e1]"><span className="sr-only">Row actions</span></th>
           </tr>
@@ -357,7 +360,7 @@ function TableBody({ block, editMode, canVerify, busy, filter, selected, onSelec
       {editMode && (
         <button type="button" disabled={busy} onClick={() => actions.addRow(block, null)}
           className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#0d2e5c] hover:underline disabled:opacity-40">
-          <Plus className="w-3.5 h-3.5" /> Add row at end
+          <Plus className="w-3.5 h-3.5" /> Add a missing row
         </button>
       )}
     </div>
@@ -402,7 +405,7 @@ function TextBody({ block, editMode, busy, actions }: Props) {
     <button type="button" disabled={!editMode || block.deleted || busy} onClick={() => setEditing(true)}
       className={`w-full text-left rounded ${editMode && !block.deleted ? "cursor-text hover:bg-[#f8f9fa]" : "cursor-default"} ${block.edited ? "bg-amber-50 border-l-2 border-amber-400 pl-2" : ""}`}>
       <Tag className={`whitespace-pre-wrap ${block.type === "heading" ? "font-bold text-base" : "text-sm"} ${block.deleted ? "line-through" : ""}`}>
-        {block.text || <span className="text-[#5f6368] italic">empty</span>}
+        {block.text || <span className="text-[#5f6368] italic">blank</span>}
       </Tag>
     </button>
   );
@@ -428,17 +431,17 @@ function BlockCard(props: Props) {
         <button type="button" onClick={() => onSelect({ blockId: block.id })}
           className="flex items-center gap-2 text-left" title={block.source_pages.length ? `Pages ${pageRanges(block.source_pages)}` : undefined}>
           <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-[11px] font-bold text-white ${style.labelBg}`}>{block.order + 1}</span>
-          <span className={`px-2 py-0.5 rounded-full border text-[11px] font-semibold ${style.chip}`}>{block.type}</span>
+          <span className={`px-2 py-0.5 rounded-full border text-[11px] font-semibold ${style.chip}`}>{TYPE_LABEL[block.type]}</span>
           {block.title && <span className="text-sm font-semibold text-[#1f1f1f]">{block.title}</span>}
         </button>
         <StatusBadge status={block.status} />
         {block.added && <span className="text-[10px] font-bold uppercase text-amber-800 bg-amber-100 px-1.5 rounded">added</span>}
         {block.deleted && <span className="text-[10px] font-bold uppercase text-red-800 bg-red-100 px-1.5 rounded">deleted</span>}
         {block.source_pages.length > 0 && <span className="text-[11px] text-[#5f6368]">p. {pageRanges(block.source_pages)}</span>}
-        {block.confidence !== null && <span className="text-[11px] text-[#5f6368]">{Math.round(block.confidence * 100)}% conf.</span>}
+        {block.confidence !== null && <span className="text-[11px] text-[#5f6368]">{Math.round(block.confidence * 100)}% sure</span>}
         <div className="ml-auto flex items-center gap-1">
           {isText && block.edited && block.revertable && editMode && (
-            <button type="button" disabled={busy} title={`Undo — original OCR: "${block.original}"`} aria-label="Undo text edit"
+            <button type="button" disabled={busy} title={`Undo — put back what the computer read: "${block.original}"`} aria-label="Undo text edit"
               onClick={() => actions.revert({ block_id: block.id })} className="p-1 rounded hover:bg-amber-50 text-amber-800 disabled:opacity-40">
               <RotateCcw className="w-4 h-4" />
             </button>
@@ -446,7 +449,7 @@ function BlockCard(props: Props) {
           {isText && canVerify && editMode && !block.deleted && (
             <button type="button" disabled={busy} onClick={() => actions.verifyBlock(block, block.status !== "VERIFIED")}
               className="px-2 py-0.5 rounded-lg text-[11px] font-semibold border border-green-300 text-green-800 hover:bg-green-50 disabled:opacity-40">
-              {block.status === "VERIFIED" ? "Unverify" : "Verify"}
+              {block.status === "VERIFIED" ? "Remove checked mark" : "Mark as checked"}
             </button>
           )}
           {block.history_count > 0 && (
@@ -459,7 +462,7 @@ function BlockCard(props: Props) {
             <button type="button" disabled={busy} onClick={() => actions.revert({ block_id: block.id })}
               className="text-[11px] font-semibold text-[#0d2e5c] hover:underline">Restore</button>
           ) : (
-            <button type="button" disabled={busy} aria-label="Delete block" title="Delete block"
+            <button type="button" disabled={busy} aria-label="Remove this section" title="Remove this section (it can be put back)"
               onClick={() => actions.deleteBlock(block)} className="p-1 rounded hover:bg-red-50 text-red-700 disabled:opacity-40">
               <Trash2 className="w-4 h-4" />
             </button>
@@ -474,7 +477,7 @@ function BlockCard(props: Props) {
       {editMode && (
         <button type="button" disabled={busy} onClick={() => actions.addBlock(block)}
           className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#0d2e5c] hover:underline disabled:opacity-40">
-          <Plus className="w-3.5 h-3.5" /> Add text block below
+          <Plus className="w-3.5 h-3.5" /> Add missing text here
         </button>
       )}
     </article>

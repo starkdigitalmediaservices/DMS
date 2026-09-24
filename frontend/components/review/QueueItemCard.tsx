@@ -54,7 +54,7 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
         (f.regions || []).map((r) => ({ page: r.page_number, x: r.x0, y: r.y0, w: r.x1 - r.x0, h: r.y1 - r.y0 }))
       );
     } catch (e: any) {
-      setError(e instanceof ApiError && e.status === 404 ? "This queue item no longer exists." : e?.message || "Could not load the queue item");
+      setError(e instanceof ApiError && e.status === 404 ? "This item no longer exists." : e?.message || "Could not load this item");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [factId]);
@@ -101,9 +101,9 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
   return (
     <section aria-label="Queue item" data-testid="queue-item-card" className="rounded-xl border-2 border-amber-400 bg-amber-50/60 p-3">
       <div className="flex flex-wrap items-center gap-2 mb-1.5">
-        <span className="text-[11px] font-bold uppercase tracking-wide text-amber-900">Queue item</span>
+        <span className="text-[11px] font-bold uppercase tracking-wide text-amber-900">You came here to check</span>
         <span className="text-sm font-semibold text-[#1f1f1f]">{sentinelLabel(fact.field_name, t)}</span>
-        <span className="text-[11px] px-2 py-0.5 rounded-full border border-[#e1e3e1] bg-white text-[#444746]">{fact.status.replace("_", " ")}</span>
+        <span className="text-[11px] px-2 py-0.5 rounded-full border border-[#e1e3e1] bg-white text-[#444746]">{fact.status === "verified" ? "Checked" : fact.status === "in_review" ? "Waiting to be checked" : "Not checked yet"}</span>
         {fact.is_handwritten && <span className="text-[11px] px-2 py-0.5 rounded-full border border-amber-300 bg-white text-amber-900">handwritten</span>}
       </div>
 
@@ -114,20 +114,20 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
         </p>
       ) : (
         <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
-          <span className="text-[#5f6368]">Value</span>
+          <span className="text-[#444746]">What the computer read</span>
           <span className="break-words font-medium">{display(fact.value)}</span>
-          <span className="text-[#5f6368]">Confidence</span>
-          <span className="font-mono">{fact.confidence !== null ? fact.confidence.toFixed(3) : "—"}</span>
+          <span className="text-[#444746]">How sure it is</span>
+          <span>{fact.confidence !== null ? `${Math.round(fact.confidence * 100)}% sure` : "Not rated"}</span>
         </div>
       )}
 
       <p className="mt-1.5 flex items-center gap-1 text-xs text-[#444746]">
         <MapPin className="w-3.5 h-3.5 shrink-0 text-amber-700" aria-hidden="true" />
         {pages.length === 0
-          ? "No source location was recorded for this item."
+          ? "The computer didn't record where on the page this came from."
           : wholePage
-          ? `Outlined on the scan: the whole of page ${pages.join(" and ")} (no exact position was recorded).`
-          : `Outlined in amber on the scan, page ${pages.join(", ")}.`}
+          ? `The whole of page ${pages.join(" and ")} is outlined on the scan (the exact spot wasn't recorded).`
+          : `It is outlined in orange on the scan, page ${pages.join(", ")}.`}
       </p>
 
       {notice && <p role="status" className="mt-2 text-xs font-semibold text-green-800 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />{notice}</p>}
@@ -138,32 +138,32 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
           {isStitch ? (
             fact.status !== "verified" && (
               <>
-                <button type="button" disabled={busy} onClick={() => act(() => api.facts.resolveStitchAmbiguity(fact.fact_id, "vertical"), "Recorded: the same table continues.")}
+                <button type="button" disabled={busy} onClick={() => act(() => api.facts.resolveStitchAmbiguity(fact.fact_id, "vertical"), "Saved: it's the same table.")}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0d2e5c] text-white text-xs font-semibold disabled:opacity-40">
-                  <ArrowUpDown className="w-3.5 h-3.5" aria-hidden="true" /> Same table continues
+                  <ArrowUpDown className="w-3.5 h-3.5" aria-hidden="true" /> Yes, it&apos;s the same table
                 </button>
-                <button type="button" disabled={busy} onClick={() => act(() => api.facts.resolveStitchAmbiguity(fact.fact_id, "horizontal"), "Recorded: side-by-side spread.")}
+                <button type="button" disabled={busy} onClick={() => act(() => api.facts.resolveStitchAmbiguity(fact.fact_id, "horizontal"), "Saved: it's the right half of a wide table.")}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#0d2e5c] text-[#0d2e5c] bg-white text-xs font-semibold disabled:opacity-40">
-                  <ArrowLeftRight className="w-3.5 h-3.5" aria-hidden="true" /> Side-by-side spread
+                  <ArrowLeftRight className="w-3.5 h-3.5" aria-hidden="true" /> It&apos;s the right half of a wide table
                 </button>
-                <button type="button" disabled={busy} onClick={() => act(() => api.facts.resolveStitchAmbiguity(fact.fact_id, "unrelated"), "Recorded: unrelated tables.")}
+                <button type="button" disabled={busy} onClick={() => act(() => api.facts.resolveStitchAmbiguity(fact.fact_id, "unrelated"), "Saved: it's a different table.")}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#0d2e5c] text-[#0d2e5c] bg-white text-xs font-semibold disabled:opacity-40">
-                  <Ban className="w-3.5 h-3.5" aria-hidden="true" /> Unrelated
+                  <Ban className="w-3.5 h-3.5" aria-hidden="true" /> No, it&apos;s a different table
                 </button>
               </>
             )
           ) : (
             <>
               {fact.status === "in_review" && (
-                <button type="button" disabled={busy} onClick={() => act(() => api.facts.confirm(fact.fact_id, fact.edit_version), "Confirmed — marked as human-verified.")}
+                <button type="button" disabled={busy} onClick={() => act(() => api.facts.confirm(fact.fact_id, fact.edit_version), "Marked as correct.")}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0d2e5c] text-white text-xs font-semibold disabled:opacity-40">
-                  <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" /> Confirm
+                  <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" /> Correct
                 </button>
               )}
               {!fact.is_handwritten && (
                 <button type="button" disabled={busy} onClick={() => act(() => api.facts.markHandwritten(fact.fact_id), "Marked as handwritten.")}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#0d2e5c] text-[#0d2e5c] bg-white text-xs font-semibold disabled:opacity-40">
-                  <PenLine className="w-3.5 h-3.5" aria-hidden="true" /> Mark handwritten
+                  <PenLine className="w-3.5 h-3.5" aria-hidden="true" /> This is handwritten
                 </button>
               )}
             </>

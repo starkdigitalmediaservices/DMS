@@ -6,8 +6,8 @@ import { ListChecks, Files } from "lucide-react";
  *  or check one document end to end against its scan (Documents). */
 export default function WorkbenchTabs({ active }: { active: "queue" | "documents" }) {
   const tabs = [
-    { key: "queue", href: "/workbench", label: "Queue", icon: ListChecks },
-    { key: "documents", href: "/workbench?tab=documents", label: "Documents", icon: Files },
+    { key: "queue", href: "/workbench", label: "Items to check", icon: ListChecks },
+    { key: "documents", href: "/workbench?tab=documents", label: "Whole documents", icon: Files },
   ] as const;
   return (
     <nav aria-label="Workbench views" className="flex gap-1 rounded-full bg-[#f0f4f9] p-1">

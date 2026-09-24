@@ -23,8 +23,8 @@ export const BLOCK_TYPE_STYLE: Record<ReviewBlockType, {
 };
 
 export const STATUS_LABEL: Record<ReviewStatus, string> = {
-  MACHINE_EXTRACTED: "Machine-extracted",
-  EDITED: "Edited",
+  MACHINE_EXTRACTED: "Not checked yet",
+  EDITED: "Corrected",
   VERIFIED: "Verified",
 };
 

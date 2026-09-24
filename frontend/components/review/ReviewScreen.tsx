@@ -9,6 +9,7 @@ import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import ScanViewer, { type FocusTarget } from "@/components/review/ScanViewer";
 import BlockCard, { blockMatches, type BlockActions, type ReviewFilter } from "@/components/review/BlockCard";
 import QueueItemCard from "@/components/review/QueueItemCard";
+import { humanFieldName } from "@/lib/fieldLabels";
 import RowDetailPanel from "@/components/review/RowDetailPanel";
 import { useRole } from "@/lib/permissions";
 import type { ReviewBlock, ReviewBox, ReviewDocument, ReviewHistoryEntry, ReviewRow } from "@/types";
@@ -16,11 +17,29 @@ import type { ReviewBlock, ReviewBox, ReviewDocument, ReviewHistoryEntry, Review
 type Banner = { kind: "error" | "conflict"; message: string } | null;
 
 const FILTERS: { key: ReviewFilter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "low_confidence", label: "Low confidence" },
-  { key: "flagged", label: "Flagged" },
-  { key: "unverified", label: "Unverified" },
+  { key: "all", label: "Everything" },
+  { key: "low_confidence", label: "Computer unsure" },
+  { key: "flagged", label: "Needs attention" },
+  { key: "unverified", label: "Not checked yet" },
 ];
+
+const HISTORY_ACTION: Record<string, string> = {
+  edit_cell: "Changed",
+  edit_text: "Changed",
+  revert_cell: "Undone (back to what the computer read)",
+  revert_text: "Undone (back to what the computer read)",
+  revert_all: "All changes undone",
+  add_row: "Row added",
+  delete_row: "Row removed",
+  revert_delete_row: "Removed row put back",
+  add_block: "Text added",
+  delete_block: "Text removed",
+  revert_delete_block: "Removed text put back",
+  verify: "Marked as checked",
+  unverify: "Check mark removed",
+  verify_row: "Row marked as checked",
+  unverify_row: "Row check mark removed",
+};
 
 function formatValue(v: unknown): string {
   if (v === null || v === undefined) return "—";
@@ -41,7 +60,7 @@ function DigitisedText({ blocks }: { blocks: ReviewBlock[] }) {
             {b.title && <h3 className="font-semibold mb-1">{b.title}</h3>}
             <table className="w-full border-collapse text-xs">
               <thead>
-                <tr>{(b.headers || []).map((h) => <th key={h} scope="col" className="border border-[#e1e3e1] bg-[#f8f9fa] px-2 py-1 text-left">{h}</th>)}</tr>
+                <tr>{(b.headers || []).map((h) => <th key={h} scope="col" className="border border-[#e1e3e1] bg-[#f8f9fa] px-2 py-1 text-left">{humanFieldName(h)}</th>)}</tr>
               </thead>
               <tbody>
                 {(b.rows || []).filter((r) => !r.deleted).map((r) => (
@@ -174,7 +193,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
       if (e instanceof ApiError && e.status === 409) {
         setBanner({ kind: "conflict", message: e.message || "Someone else changed this document. Reload to see the latest." });
       } else {
-        setBanner({ kind: "error", message: e?.message || "Save failed" });
+        setBanner({ kind: "error", message: e?.message || "Your change couldn't be saved. Please try again." });
       }
       return false;
     } finally {
@@ -281,7 +300,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
           <>
             <span className="text-xs text-[#5f6368]">{doc.page_count} {doc.page_count === 1 ? "page" : "pages"}</span>
             <span data-testid="review-badge" className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${doc.is_clean ? "bg-[#f0f4f9] border-[#e1e3e1] text-[#444746]" : "bg-amber-50 border-amber-300 text-amber-900"}`}>
-              {doc.is_clean ? "reviewed · no changes" : `reviewed · ${doc.edit_count} changed`}
+              {doc.is_clean ? "No corrections yet" : `${doc.edit_count} ${doc.edit_count === 1 ? "correction" : "corrections"}`}
             </span>
           </>
         )}
@@ -290,13 +309,13 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
             <button type="button" aria-pressed={editMode} onClick={() => setEditMode((m) => !m)}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border ${editMode ? "bg-[#0d2e5c] text-white border-[#0d2e5c]" : "bg-white text-[#0d2e5c] border-[#0d2e5c]"}`}>
               {editMode ? <Pencil className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              {editMode ? "Edit mode on" : "Edit mode off"}
+              {editMode ? "Done editing" : "Start editing"}
             </button>
           )}
           {doc?.permissions.can_revert_all && (
             <button type="button" disabled={busy || doc.is_clean} onClick={() => setConfirmRevertAll(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-300 text-red-800 hover:bg-red-50 disabled:opacity-40">
-              <RotateCcw className="w-3.5 h-3.5" /> Revert all
+              <RotateCcw className="w-3.5 h-3.5" /> Undo all changes
             </button>
           )}
         </div>
@@ -376,7 +395,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
                 {(["sections", "text"] as const).map((k) => (
                   <button key={k} role="tab" aria-selected={tab === k} type="button" onClick={() => setTab(k)}
                     className={`px-3 py-1.5 rounded-full text-xs font-bold border ${tab === k ? "bg-[#0d2e5c] text-white border-[#0d2e5c]" : "bg-white text-[#444746] border-[#e1e3e1]"}`}>
-                    {k === "sections" ? "Sections" : "Digitised text"}
+                    {k === "sections" ? "Extracted values" : "Clean copy (read only)"}
                   </button>
                 ))}
               </div>
@@ -409,7 +428,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
                   {editMode && (
                     <button type="button" disabled={busy} onClick={() => setAddAfter({ block: null, type: "paragraph", text: "" })}
                       className="w-full py-2 rounded-xl border-2 border-dashed border-[#c4c7c5] text-xs font-semibold text-[#0d2e5c] hover:bg-white disabled:opacity-40">
-                      + Add text block at end
+                      + Add missing text at the end
                     </button>
                   )}
                 </>
@@ -421,10 +440,10 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
 
       <ConfirmModal
         isOpen={confirmRevertAll}
-        title="Revert all corrections?"
-        message={`This discards all ${doc?.edit_count ?? 0} correction(s) on this document and returns it to the raw extraction. Every change stays in the audit history.`}
+        title="Undo all changes?"
+        message={`This puts the whole document back exactly as the computer first read it, removing all ${doc?.edit_count ?? 0} correction(s). A record of every change is kept.`}
         type="danger"
-        confirmText="Revert all"
+        confirmText="Undo all changes"
         onClose={() => setConfirmRevertAll(false)}
         onConfirm={() => {
           setConfirmRevertAll(false);
@@ -448,7 +467,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
                 {history.entries.map((h) => (
                   <li key={h.id} className="text-sm border-b border-[#f0f0f0] pb-2">
                     <div className="flex justify-between gap-2 text-xs text-[#5f6368]">
-                      <span className="font-semibold text-[#1f1f1f]">{h.action.replace(/_/g, " ")}</span>
+                      <span className="font-semibold text-[#1f1f1f]">{HISTORY_ACTION[h.action] || h.action.replace(/_/g, " ")}</span>
                       <time dateTime={h.created_at}>{new Date(h.created_at + "Z").toLocaleString()}</time>
                     </div>
                     <div className="text-xs text-[#5f6368]">by {h.user_name || h.user_id}</div>

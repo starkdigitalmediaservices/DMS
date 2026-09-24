@@ -37,8 +37,8 @@ test("click box on scan -> card highlights -> edit cell -> undo", async ({ page 
   // The document may already carry real corrections; everything below is
   // relative to where it started, and ends back there.
   const badge = page.getByTestId("review-badge");
-  const startChanged = parseInt((await badge.innerText()).match(/(\d+) changed/)?.[1] || "0", 10);
-  const badgeFor = (n: number) => (n === 0 ? "reviewed · no changes" : `reviewed · ${n} changed`);
+  const startChanged = parseInt((await badge.innerText()).match(/(\d+) correction/)?.[1] || "0", 10);
+  const badgeFor = (n: number) => (n === 0 ? "No corrections yet" : `${n} ${n === 1 ? "correction" : "corrections"}`);
   const editedCells = page.locator("[data-testid=review-cell][data-edited=true]");
   const startEdited = await editedCells.count();
 
@@ -57,7 +57,7 @@ test("click box on scan -> card highlights -> edit cell -> undo", async ({ page 
   await expect(highlighted).toBeInViewport();
 
   // Edit a not-yet-edited cell of that row.
-  await page.getByRole("button", { name: "Edit mode off" }).click();
+  await page.getByRole("button", { name: "Start editing" }).click();
   const cell = highlighted.locator("[data-testid=review-cell][data-edited=false]").first();
   const original = (await cell.locator("button").first().innerText()).trim();
   await cell.locator("button").first().click();
@@ -88,7 +88,7 @@ test("workbench: documents tab -> review -> back, and queue item -> its cell in 
   await page.goto("/workbench?tab=documents");
   const rows = page.getByTestId("review-document-row");
   await expect(rows.first()).toBeVisible({ timeout: 20_000 });
-  await rows.first().getByRole("link", { name: /^Review / }).click();
+  await rows.first().getByRole("link", { name: /^Open / }).click();
   await expect(page).toHaveURL(/\/workbench\?doc=.*from=documents/);
   await expect(page.getByTestId("page-indicator")).toContainText("page 1 /", { timeout: 30_000 });
   await page.getByRole("link", { name: "Back to documents" }).click();
@@ -96,7 +96,7 @@ test("workbench: documents tab -> review -> back, and queue item -> its cell in 
 
   await page.goto("/workbench");
   await page.waitForLoadState("networkidle");
-  const open = page.getByRole("link", { name: "Open in document" });
+  const open = page.getByRole("link", { name: "Show on page" });
   test.skip((await open.count()) === 0, "the low-confidence queue is empty");
   await open.first().click();
   await expect(page).toHaveURL(/fact=.*from=queue/);
@@ -105,19 +105,19 @@ test("workbench: documents tab -> review -> back, and queue item -> its cell in 
   // the queue item's source region (dashed) is outlined on the scan
   await expect(page.locator("[data-overlay=focus]")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("queue-item-card")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Back to queue" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Back to the list" })).toBeVisible();
 
   // every queue type opens here -- the old region popup is gone; a margin
   // note (not a table cell) gets its item card and an amber outline instead
   await page.goto("/workbench");
   await page.waitForLoadState("networkidle");
   await expect(page.getByRole("button", { name: "View Source Region" })).toHaveCount(0);
-  await page.getByRole("tab", { name: /Marginalia/ }).click();
+  await page.getByRole("tab", { name: /Notes in the margin/ }).click();
   await page.waitForLoadState("networkidle");
-  const marg = page.getByRole("link", { name: "Open in document" });
+  const marg = page.getByRole("link", { name: "Show on page" });
   if (await marg.count()) {
     await marg.first().click();
-    await expect(page.getByTestId("queue-item-card")).toContainText("Handwritten margin note", { timeout: 30_000 });
+    await expect(page.getByTestId("queue-item-card")).toContainText("Note written in the margin", { timeout: 30_000 });
     await expect(page.locator("[data-overlay=focus]")).toBeVisible({ timeout: 30_000 });
   }
 

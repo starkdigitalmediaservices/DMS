@@ -46,14 +46,14 @@ export default function ReviewDocumentsView() {
         </Link>
         <h1 className="text-base sm:text-lg font-bold flex items-center gap-2">
           <ShieldCheck className="w-5 h-5 text-[#0d2e5c]" aria-hidden="true" />
-          Verification Workbench
+          Check extracted data
         </h1>
         <WorkbenchTabs active="documents" />
       </header>
 
       <main className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-6">
         <p className="text-sm text-[#444746] mb-4">
-          Check a whole document against its scan: every extracted value next to where it was read from.
+          Go through a whole document page by page, comparing what the computer read with the original scan.
         </p>
         <form
           role="search"
@@ -90,9 +90,9 @@ export default function ReviewDocumentsView() {
                 <tr>
                   <th scope="col" className="px-4 py-2.5 font-semibold">Document</th>
                   <th scope="col" className="px-3 py-2.5 font-semibold">Pages</th>
-                  <th scope="col" className="px-3 py-2.5 font-semibold">Needs review</th>
-                  <th scope="col" className="px-3 py-2.5 font-semibold min-w-[10rem]">Verified</th>
-                  <th scope="col" className="px-3 py-2.5 font-semibold">Last reviewed</th>
+                  <th scope="col" className="px-3 py-2.5 font-semibold">Values to check</th>
+                  <th scope="col" className="px-3 py-2.5 font-semibold min-w-[10rem]">Checked by a person</th>
+                  <th scope="col" className="px-3 py-2.5 font-semibold">Last checked</th>
                   <th scope="col" className="px-3 py-2.5"><span className="sr-only">Open</span></th>
                 </tr>
               </thead>
@@ -112,7 +112,7 @@ export default function ReviewDocumentsView() {
                             <Clock className="w-3 h-3" aria-hidden="true" /> {d.in_review_count}
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-xs text-green-800"><CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" /> none</span>
+                          <span className="inline-flex items-center gap-1 text-xs text-green-800"><CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" /> nothing left</span>
                         )}
                       </td>
                       <td className="px-3 py-3">
@@ -130,16 +130,16 @@ export default function ReviewDocumentsView() {
                             {d.last_reviewed_by && <span className="block text-[#5f6368]">by {d.last_reviewed_by}</span>}
                           </>
                         ) : (
-                          <span className="text-[#5f6368]">Not started</span>
+                          <span className="text-[#5f6368]">Not started yet</span>
                         )}
                       </td>
                       <td className="px-3 py-3 text-right">
                         <Link
                           href={`/workbench?doc=${encodeURIComponent(d.document_id)}&from=documents`}
                           className="inline-flex px-3 py-1.5 rounded-lg bg-[#0d2e5c] text-white text-xs font-semibold hover:bg-[#0945a5]"
-                          aria-label={`Review ${d.title}`}
+                          aria-label={`Open ${d.title}`}
                         >
-                          Review
+                          Open
                         </Link>
                       </td>
                     </tr>
@@ -159,7 +159,7 @@ export default function ReviewDocumentsView() {
           )}
         </div>
         <p className="mt-3 text-xs text-[#5f6368]">
-          Only documents with template-extracted values are listed for now; other documents will appear once their text blocks are extracted.
+          Only documents whose tables were read by the computer are listed for now. Other documents will appear here later.
         </p>
       </main>
     </div>

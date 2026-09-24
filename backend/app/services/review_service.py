@@ -262,6 +262,27 @@ async def _build_blocks_from_facts(db: AsyncSession, doc: Document) -> List[Dict
     return blocks
 
 
+async def plan_document_blocks(db: AsyncSession, doc: Document) -> Tuple[str, List[Dict[str, Any]], Dict[str, int]]:
+    """Which builder a document gets, and its blocks (see review_blocks.py).
+
+    Template-extracted Facts win: they are the single source of truth for
+    those values. Otherwise the archived OCR result for this exact file
+    (best source per page), else the search chunks' text."""
+    from app.models.document_version import DocumentVersion
+    from app.services import review_blocks
+
+    blocks = await _build_blocks_from_facts(db, doc)
+    if blocks:
+        return "facts", blocks, {"facts": len({p for b in blocks for p in b.get("source_pages", [])})}
+
+    version = await db.get(DocumentVersion, doc.current_version_id) if doc.current_version_id else None
+    _, pages = await review_blocks.load_ocr_pages(db, version.file_hash if version else None)
+    if not pages:
+        pages = await review_blocks.load_chunk_pages(db, doc.tenant_id, doc.id, doc.current_version_id)
+    blocks, used = review_blocks.blocks_from_pages(pages)
+    return review_blocks.builder_name(used, has_facts=False), blocks, used
+
+
 def _initial_state_blocks(original_blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The working copy: structure only. Fact cells become bare references;
     their value is always read live from doc_dg_facts."""
@@ -291,8 +312,13 @@ async def _ensure_review(db: AsyncSession, doc: Document) -> Tuple[ReviewOrigina
         original = await db.get(ReviewOriginal, state.original_id)
         return original, state
 
-    blocks = await _build_blocks_from_facts(db, doc)
-    builder = "facts" if blocks else "none"
+    builder, blocks, _ = await plan_document_blocks(db, doc)
+    return await create_review(db, doc, builder, blocks)
+
+
+async def create_review(db: AsyncSession, doc: Document, builder: str, blocks: List[Dict[str, Any]]) -> Tuple[ReviewOriginal, ReviewState]:
+    """Snapshot + working copy for a document (shared by first open and the
+    backfill script, so both produce exactly the same thing)."""
     # ON CONFLICT: two reviewers opening a never-reviewed document at the
     # same moment must not both fail -- the loser just reads the winner's.
     await db.execute(
@@ -471,12 +497,15 @@ async def get_review_document(db: AsyncSession, tenant_id: UUID, document_id: UU
                         text = sc.get("text", "")
                         edited = text != otext
                         all_cells_verified = False
+                        ocell = ocells[ci] if ci < len(ocells) and not row_added else {}
+                        conf = ocell.get("confidence")
                         cells_out.append({
                             "fact_id": None, "text": text, "original": otext,
                             "edited": edited, "status": EDITED if edited else MACHINE,
                             "revertable": edited and not row_added,
-                            "confidence": None, "low_confidence": False,
-                            "bbox": None, "regions": [], "history_count": history.get(key, 0),
+                            "confidence": conf, "low_confidence": conf is not None and conf < low_conf,
+                            "bbox": ocell.get("bbox"), "regions": ocell.get("regions") or [],
+                            "history_count": history.get(key, 0),
                         })
                     if cells_out[-1]["edited"]:
                         row_edited = True
@@ -1158,13 +1187,17 @@ async def get_page_image(db: AsyncSession, tenant_id: UUID, document_id: UUID, p
 async def list_review_documents(
     db: AsyncSession, tenant_id: UUID, q: Optional[str] = None, limit: int = 50, offset: int = 0,
 ) -> Dict[str, Any]:
-    """Documents that have something to review, with progress per document.
+    """Scanned documents (PDFs and images) that can be checked against their
+    scan, with progress per document; those with values still waiting for a
+    person come first.
 
     Runs on the caller's RLS session, so department scope applies exactly as
-    for the document list. Counts are over real (non "_"-prefixed) facts --
-    the same set the review screen shows. Documents in review come first."""
+    for the document list. Value counts are over real (non "_"-prefixed)
+    facts; a document without template-extracted values shows zero counts
+    and is checked block by block instead."""
     from sqlalchemy import case, func
 
+    from app.models.document_version import DocumentVersion
     from app.models.user import User
 
     fact_counts = (
@@ -1178,38 +1211,44 @@ async def list_review_documents(
         .group_by(Fact.document_id)
         .subquery()
     )
+    in_review = func.coalesce(fact_counts.c.in_review, 0)
     stmt = (
         select(
             Document.id, Document.title, Document.pages_total_count,
-            fact_counts.c.fact_count, fact_counts.c.in_review, fact_counts.c.verified,
+            func.coalesce(fact_counts.c.fact_count, 0), in_review, func.coalesce(fact_counts.c.verified, 0),
             ReviewState.version, ReviewState.updated_at, User.full_name, User.email,
         )
-        .join(fact_counts, fact_counts.c.document_id == Document.id)
+        .join(DocumentVersion, DocumentVersion.id == Document.current_version_id)
+        .outerjoin(fact_counts, fact_counts.c.document_id == Document.id)
         .outerjoin(ReviewState, ReviewState.document_id == Document.id)
         .outerjoin(User, User.id == ReviewState.updated_by)
-        .where(Document.tenant_id == tenant_id, Document.is_trashed.is_(False))
+        .where(
+            Document.tenant_id == tenant_id,
+            Document.is_trashed.is_(False),
+            # only files that have a scan to compare against
+            func.lower(DocumentVersion.original_filename).op("~")(r"\.(pdf|png|jpe?g|tiff?|bmp|webp)$"),
+        )
     )
     if q:
         stmt = stmt.where(Document.title.ilike(f"%{q}%"))
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
-    stmt = stmt.order_by(
-        case((fact_counts.c.in_review > 0, 0), else_=1), fact_counts.c.in_review.desc(), Document.title
-    ).limit(min(max(limit, 1), 200)).offset(max(offset, 0))
+    stmt = stmt.order_by(case((in_review > 0, 0), else_=1), in_review.desc(), Document.title) \
+        .limit(min(max(limit, 1), 200)).offset(max(offset, 0))
 
     items = []
     for row in (await db.execute(stmt)).all():
-        (doc_id, title, pages, fact_count, in_review, verified, version, updated_at, name, email) = row
+        (doc_id, title, pages, fact_count, n_review, verified, version, updated_at, name, email) = row
+        started = bool(version and version > 1)
         items.append({
             "document_id": str(doc_id),
             "title": title,
             "page_count": pages or 0,
             "fact_count": fact_count,
-            "in_review_count": in_review,
+            "in_review_count": n_review,
             "verified_count": verified,
             "verified_pct": round(100 * verified / fact_count) if fact_count else 0,
-            # version > 1 means at least one review action has been saved
-            "review_started": bool(version and version > 1),
-            "last_reviewed_at": updated_at.isoformat() if version and version > 1 and updated_at else None,
-            "last_reviewed_by": (name or email) if version and version > 1 else None,
+            "review_started": started,
+            "last_reviewed_at": updated_at.isoformat() if started and updated_at else None,
+            "last_reviewed_by": (name or email) if started else None,
         })
     return {"total": total, "items": items}

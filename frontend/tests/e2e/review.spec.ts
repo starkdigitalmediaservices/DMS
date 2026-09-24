@@ -65,14 +65,22 @@ test("click box on scan -> card highlights -> edit cell -> undo", async ({ page 
   await editor.fill("E2E-REVIEW-VALUE");
   await editor.press("Enter");
 
-  await expect(badge).toHaveText(badgeFor(startChanged + 1));
-  await expect(editedCells).toHaveCount(startEdited + 1);
   const edited = page.locator("[data-testid=review-cell][data-edited=true]", { hasText: "E2E-REVIEW-VALUE" });
-  await expect(edited).toHaveCount(1);
-  await expect(edited.getByRole("button", { name: /Undo edit/ })).toHaveAttribute("title", /original OCR/);
+  let undone = false;
+  try {
+    await expect(badge).toHaveText(badgeFor(startChanged + 1));
+    await expect(editedCells).toHaveCount(startEdited + 1);
+    await expect(edited).toHaveCount(1);
+    await expect(edited.getByRole("button", { name: /Undo edit/ })).toHaveAttribute("title", /what the computer read/);
 
-  // Undo it.
-  await edited.getByRole("button", { name: /Undo edit/ }).click();
+    // Undo it.
+    await edited.getByRole("button", { name: /Undo edit/ }).click();
+    undone = true;
+  } finally {
+    // This runs against real data: never leave the test value behind, even
+    // when an assertion above fails.
+    if (!undone && (await edited.count())) await edited.getByRole("button", { name: /Undo edit/ }).click();
+  }
   await expect(badge).toHaveText(badgeFor(startChanged));
   await expect(editedCells).toHaveCount(startEdited);
   if (original !== "empty") await expect(highlighted.getByText(original, { exact: true }).first()).toBeVisible();
@@ -100,12 +108,32 @@ test("workbench: documents tab -> review -> back, and queue item -> its cell in 
   test.skip((await open.count()) === 0, "the low-confidence queue is empty");
   await open.first().click();
   await expect(page).toHaveURL(/fact=.*from=queue/);
-  // exactly the queue item's cell is selected in the list, and outlined on the scan
-  await expect(page.locator("td[data-testid=review-cell].outline")).toHaveCount(1, { timeout: 60_000 });
-  // the queue item's source region (dashed) is outlined on the scan
+  // Focused view: only the item card and its outline -- no table, no other boxes.
+  const card = page.getByTestId("queue-item-card");
+  await expect(card).toBeVisible({ timeout: 60_000 });
   await expect(page.locator("[data-overlay=focus]")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("queue-item-card")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Back to the list" })).toBeVisible();
+  await expect(page.getByTestId("review-card")).toHaveCount(0);
+  await expect(page.locator("[data-overlay^='b-'], [data-overlay^='r-']")).toHaveCount(0);
+
+  // Correct it from the card, then undo -- the value ends exactly as it started.
+  const input = page.getByTestId("queue-item-value");
+  await expect(input).not.toHaveValue("", { timeout: 30_000 });
+  const before = await input.inputValue();
+  await input.fill(before + " E2E");
+  await card.getByRole("button", { name: "Save correction" }).click();
+  const undoMine = card.getByRole("button", { name: /Undo my correction/ });
+  try {
+    await expect(card).toContainText("Your correction is saved", { timeout: 30_000 });
+    await expect(card.getByRole("link", { name: /Back to the list/ })).toBeVisible();
+  } finally {
+    await undoMine.click({ timeout: 30_000 });
+  }
+  await expect(input).toHaveValue(before, { timeout: 30_000 });
+
+  // The whole document is one click away, with the item's cell selected.
+  await page.getByRole("button", { name: "Show the whole document" }).click();
+  await expect(page.locator("td[data-testid=review-cell].outline")).toHaveCount(1, { timeout: 60_000 });
+  await expect(page.getByRole("banner").getByRole("link", { name: "Back to the list" })).toBeVisible();
 
   // every queue type opens here -- the old region popup is gone; a margin
   // note (not a table cell) gets its item card and an amber outline instead

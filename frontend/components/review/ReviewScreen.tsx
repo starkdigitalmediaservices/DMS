@@ -23,6 +23,8 @@ const FILTERS: { key: ReviewFilter; label: string }[] = [
   { key: "unverified", label: "Not checked yet" },
 ];
 
+const NO_BLOCKS: ReviewBlock[] = [];
+
 const HISTORY_ACTION: Record<string, string> = {
   edit_cell: "Changed",
   edit_text: "Changed",
@@ -248,6 +250,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
     },
   }), [documentId, run]);
 
+
   const detailBlock = detail ? doc?.blocks.find((b) => b.id === detail.blockId) : undefined;
   const detailRow = detail ? detailBlock?.rows?.find((r) => r.id === detail.rowId) : undefined;
 
@@ -258,6 +261,11 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
   // and continuation questions are not, so the scan goes to their page.
   const [focusBoxes, setFocusBoxes] = useState<ReviewBox[]>([]);
   const [focusIsCell, setFocusIsCell] = useState<boolean | null>(null);
+  const [focusCell, setFocusCell] = useState<{ blockId: string; rowId: string; col: number } | null>(null);
+  // Arriving from the list: show only that one item (card + its outline on
+  // the scan); the rest of the document is one click away.
+  const [showWhole, setShowWhole] = useState(false);
+  const focusMode = showQueueItem && !!focusFactId && !showWhole;
   useEffect(() => {
     if (focusIsCell === false && focusBoxes.length) setPage(focusBoxes[0].page);
   }, [focusIsCell, focusBoxes]);
@@ -273,6 +281,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
         const col = row.cells.findIndex((c) => c.fact_id === focusFactId);
         if (col >= 0) {
           setFocusIsCell(true);
+          setFocusCell({ blockId: block.id, rowId: row.id, col });
           select({ blockId: block.id, rowId: row.id, col });
           setTimeout(() => document.getElementById(`row-${block.id}-${row.id}`)?.scrollIntoView({ block: "center" }), 150);
           return;
@@ -281,6 +290,14 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
     }
     setFocusIsCell(false);
   }, [doc, focusFactId, select]);
+
+  const focusCellLive = (() => {
+    if (!focusCell || !doc) return null;
+    const block = doc.blocks.find((b) => b.id === focusCell.blockId);
+    const row = block?.rows?.find((r) => r.id === focusCell.rowId);
+    const cell = row?.cells[focusCell.col];
+    return block && row && cell ? { block, row, col: focusCell.col, cell } : null;
+  })();
 
   if (!documentId) {
     return <p className="p-8 text-sm">No document selected. <Link href={backHref} className="underline">{backLabel}</Link></p>;
@@ -305,14 +322,14 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
           </>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {doc?.permissions.can_edit && (
+          {doc?.permissions.can_edit && !focusMode && (
             <button type="button" aria-pressed={editMode} onClick={() => setEditMode((m) => !m)}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border ${editMode ? "bg-[#0d2e5c] text-white border-[#0d2e5c]" : "bg-white text-[#0d2e5c] border-[#0d2e5c]"}`}>
               {editMode ? <Pencil className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               {editMode ? "Done editing" : "Start editing"}
             </button>
           )}
-          {doc?.permissions.can_revert_all && (
+          {doc?.permissions.can_revert_all && !focusMode && (
             <button type="button" disabled={busy || doc.is_clean} onClick={() => setConfirmRevertAll(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-300 text-red-800 hover:bg-red-50 disabled:opacity-40">
               <RotateCcw className="w-3.5 h-3.5" /> Undo all changes
@@ -346,7 +363,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
         >
           <div className="h-[60vh] lg:h-full min-h-0 min-w-0">
             <ScanViewer documentId={documentId} page={Math.min(page, pageCount)} pageCount={pageCount} onPageChange={setPage}
-              blocks={doc.blocks} selected={selected} hovered={hovered} onBoxClick={(t) => select(t, true)}
+              blocks={focusMode ? NO_BLOCKS : doc.blocks} selected={selected} hovered={hovered} onBoxClick={(t) => select(t, true)}
               focusBoxes={focusBoxes} />
           </div>
 
@@ -367,9 +384,20 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
           <section aria-label="Extracted content" className="flex flex-col min-h-0 min-w-0">
             {showQueueItem && focusFactId && (
               <div className="mb-2">
-                <QueueItemCard factId={focusFactId} docVersion={doc?.version} canReview={roleCan("facts.review")} onRegions={setFocusBoxes} onChanged={load} />
+                <QueueItemCard
+                  factId={focusFactId} docVersion={doc?.version} canReview={roleCan("facts.review")}
+                  onRegions={setFocusBoxes} onChanged={load} backHref={backHref}
+                  cell={focusCellLive ? { text: focusCellLive.cell.text, original: focusCellLive.cell.original, edited: focusCellLive.cell.edited, revertable: focusCellLive.cell.revertable } : null}
+                  onSaveCell={focusCellLive ? (v) => actions.editCell(focusCellLive.block, focusCellLive.row, focusCellLive.col, v) : undefined}
+                  onUndoCell={focusCellLive ? () => actions.revert({ block_id: focusCellLive.block.id, row_id: focusCellLive.row.id, col: focusCellLive.col }) : undefined}
+                />
+                <button type="button" onClick={() => setShowWhole((v) => !v)}
+                  className="mt-2 text-xs font-semibold text-[#0d2e5c] hover:underline">
+                  {focusMode ? "Show the whole document" : "Show only this item"}
+                </button>
               </div>
             )}
+            {!focusMode && (<>
             {detailBlock && detailRow && tab === "sections" && (
               <div className="mb-2">
                 <RowDetailPanel
@@ -434,6 +462,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
                 </>
               )}
             </div>
+            </>)}
           </section>
         </main>
       ) : null}

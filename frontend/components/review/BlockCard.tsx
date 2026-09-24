@@ -470,8 +470,17 @@ function BlockCard(props: Props) {
         </div>
       </header>
 
+      {(block.flags.includes("no_layout") || block.flags.includes("page_header") || block.flags.includes("page_footer")) && (
+        <p className="mb-1 text-[11px] text-[#444746]">
+          {block.flags.includes("no_layout")
+            ? "The computer didn't record where on the page this text is, so it isn't outlined on the scan."
+            : block.flags.includes("page_header") ? "Printed at the top of the page (page header)." : "Printed at the bottom of the page (page footer)."}
+        </p>
+      )}
       {block.type === "table" ? <TableBody {...props} /> : isText ? <TextBody {...props} /> : (
-        <p className="text-xs text-[#5f6368] italic">Image region — nothing to transcribe.</p>
+        <p className="text-sm text-[#1f1f1f]">
+          <span className="text-[#444746]">Picture{block.text ? ": " : ""}</span>{block.text}
+        </p>
       )}
 
       {editMode && (

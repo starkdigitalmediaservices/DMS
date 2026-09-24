@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeftRight, ArrowUpDown, Ban, CheckCircle2, Loader2, MapPin, PenLine } from "lucide-react";
+import Link from "next/link";
+import { ArrowLeft, ArrowLeftRight, ArrowUpDown, Ban, CheckCircle2, Loader2, MapPin, PenLine, RotateCcw, Save } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { sentinelLabel } from "@/lib/factLabels";
@@ -28,6 +29,13 @@ interface Props {
   onRegions: (boxes: ReviewBox[]) => void;
   /** After confirm / handwritten / resolve: the review document changed too. */
   onChanged: () => void;
+  /** When the item is a table cell on this screen: its live state, and how
+   *  to save / undo through the review screen (so the change is audited and
+   *  undoable like any other cell edit). */
+  cell?: { text: string; original: string; edited: boolean; revertable: boolean } | null;
+  onSaveCell?: (value: string) => Promise<boolean>;
+  onUndoCell?: () => void;
+  backHref: string;
 }
 
 function display(value: any): string {
@@ -39,12 +47,14 @@ function display(value: any): string {
 /** The queue item a reviewer arrived with, pinned above the document's
  *  blocks: what it is, where it came from, and the same actions the queue's
  *  panel offers -- so nothing needs the old "View Source" popup. */
-export default function QueueItemCard({ factId, docVersion, canReview, onRegions, onChanged }: Props) {
+export default function QueueItemCard({ factId, docVersion, canReview, onRegions, onChanged, cell, onSaveCell, onUndoCell, backHref }: Props) {
   const { t } = useI18n();
   const [fact, setFact] = useState<FactDetail | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -63,13 +73,14 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
     load();
   }, [load, docVersion]);
 
-  const act = async (fn: () => Promise<any>, done: string) => {
+  const act = async (fn: () => Promise<any>, doneMessage: string) => {
     setBusy(true);
     setError("");
     setNotice("");
     try {
       await fn();
-      setNotice(done);
+      setNotice(doneMessage);
+      setDone(true);
       await load();
       onChanged();
     } catch (e: any) {
@@ -95,6 +106,21 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
   }
 
   const isStitch = fact.field_name === "_stitch_ambiguous";
+  const current = cell ? cell.text : display(fact.value) === "—" ? "" : display(fact.value);
+  const value = draft ?? current;
+
+  const save = async () => {
+    if (value === current) return;
+    await act(async () => {
+      if (cell && onSaveCell) {
+        if (!(await onSaveCell(value))) throw new Error("Your change couldn't be saved. Please try again.");
+      } else {
+        const next = fact.value && typeof fact.value === "object" ? { ...fact.value, v: value } : { v: value };
+        await api.facts.bulkEdit([{ fact_id: fact.fact_id, new_value: next, expected_version: fact.edit_version }]);
+      }
+      setDraft(null);
+    }, "Your correction is saved. Someone with permission to verify will confirm it later.");
+  };
   const wholePage = fact.regions.length > 0 && fact.regions.every((r) => (r.x1 - r.x0) * (r.y1 - r.y0) >= 0.95);
   const pages = Array.from(new Set(fact.regions.map((r) => r.page_number))).sort((a, b) => a - b);
 
@@ -113,11 +139,44 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
           whether page {fact.value?.page_b ?? "?"} continues the same table, is a side-by-side spread, or is an unrelated table.
         </p>
       ) : (
-        <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
-          <span className="text-[#444746]">What the computer read</span>
-          <span className="break-words font-medium">{display(fact.value)}</span>
-          <span className="text-[#444746]">How sure it is</span>
-          <span>{fact.confidence !== null ? `${Math.round(fact.confidence * 100)}% sure` : "Not rated"}</span>
+        <div className="space-y-2">
+          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
+            <span className="text-[#444746]">{cell?.edited ? "The computer read" : "What the computer read"}</span>
+            <span className="break-words font-medium">{cell?.edited ? cell.original || "(blank)" : display(fact.value)}</span>
+            <span className="text-[#444746]">How sure it is</span>
+            <span>{fact.confidence !== null ? `${Math.round(fact.confidence * 100)}% sure` : "Not rated"}</span>
+          </div>
+          {canReview && (
+            <div>
+              <label htmlFor={`fix-${fact.fact_id}`} className="block text-xs font-semibold text-[#444746] mb-1">
+                {cell?.edited ? "Corrected value (you can change it again)" : "If it's wrong, type the correct value"}
+              </label>
+              <div className="flex flex-wrap items-start gap-2">
+                <textarea
+                  id={`fix-${fact.fact_id}`}
+                  data-testid="queue-item-value"
+                  value={value}
+                  rows={Math.min(4, Math.max(1, Math.ceil(value.length / 60)))}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(); }
+                    if (e.key === "Escape") setDraft(null);
+                  }}
+                  className="flex-1 min-w-[12rem] rounded-lg border border-[#c4c7c5] bg-white px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0d2e5c]/40"
+                />
+                <button type="button" disabled={busy || value === current} onClick={save}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0d2e5c] text-white text-xs font-semibold disabled:opacity-40">
+                  <Save className="w-3.5 h-3.5" aria-hidden="true" /> Save correction
+                </button>
+              </div>
+              {cell?.edited && cell.revertable && onUndoCell && (
+                <button type="button" disabled={busy} onClick={onUndoCell}
+                  className="mt-1 inline-flex items-center gap-1 text-xs text-amber-900 hover:underline disabled:opacity-40">
+                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" /> Undo my correction (put back “{cell.original || "blank"}”)
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -132,6 +191,12 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
 
       {notice && <p role="status" className="mt-2 text-xs font-semibold text-green-800 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />{notice}</p>}
       {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
+
+      {done && (
+        <Link href={backHref} className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#0d2e5c] bg-white text-[#0d2e5c] text-xs font-semibold hover:bg-[#f0f4f9]">
+          <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" /> Back to the list for the next item
+        </Link>
+      )}
 
       {canReview && (
         <div className="mt-2 flex flex-wrap gap-2">
@@ -157,7 +222,7 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
               {fact.status === "in_review" && (
                 <button type="button" disabled={busy} onClick={() => act(() => api.facts.confirm(fact.fact_id, fact.edit_version), "Marked as correct.")}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0d2e5c] text-white text-xs font-semibold disabled:opacity-40">
-                  <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" /> Correct
+                  <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" /> {cell?.edited ? "Confirm the corrected value" : "It's correct as read"}
                 </button>
               )}
               {!fact.is_handwritten && (

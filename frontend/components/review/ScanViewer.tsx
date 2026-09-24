@@ -90,7 +90,9 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
   const overlays = useMemo(() => {
     const out: { key: string; target: FocusTarget; box: Omit<ReviewBox, "page">; kind: "block" | "row" | "cell"; block: ReviewBlock; label?: string }[] = [];
     for (const block of blocks) {
-      if (block.deleted) continue;
+      // Text with no recorded position is "outlined" as the whole page; drawing
+      // that would cover the scan and point at nothing.
+      if (block.deleted || block.flags?.includes("no_layout")) continue;
       const bb = block.bbox?.[String(page)];
       if (bb) out.push({ key: `b-${block.id}`, target: { blockId: block.id }, box: bb, kind: "block", block, label: String(block.order + 1) });
       for (const row of block.rows || []) {
@@ -118,9 +120,15 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
 
   const focusOnPage = focusBoxes.filter((b) => b.page === page);
 
-  // With nothing selected, bring the queue item's region into view.
+  // Bring the queue item's region into view -- unless a selection that is
+  // actually drawn on this page takes precedence (in the focused, item-only
+  // view no other boxes are drawn, so the item always wins there).
   useEffect(() => {
-    if (selected || !imgLoaded || !focusOnPage.length || !scroller.current) return;
+    if (!imgLoaded || !focusOnPage.length || !scroller.current) return;
+    const selectedDrawn = selected && scroller.current.querySelector(
+      selected.rowId ? `[data-overlay="r-${selected.blockId}-${selected.rowId}"]` : `[data-overlay="b-${selected.blockId}"]`
+    );
+    if (selectedDrawn) return;
     scroller.current.querySelector<HTMLElement>("[data-overlay=focus]")?.scrollIntoView({ block: "center", inline: "center" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imgLoaded, page, focusBoxes, selected]);

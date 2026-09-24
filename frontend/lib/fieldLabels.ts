@@ -14,7 +14,9 @@ const WORDS: Record<string, string> = {
 };
 
 export function humanFieldName(name: string): string {
-  if (!name) return name;
+  // Only machine identifiers are rewritten; a real column heading read off
+  // the scan (e.g. Marathi "पृष्ठे") is shown exactly as read.
+  if (!name || !/^[a-z0-9_]+$/.test(name)) return name;
   const words = name
     .split(/[_\s]+/)
     .filter(Boolean)

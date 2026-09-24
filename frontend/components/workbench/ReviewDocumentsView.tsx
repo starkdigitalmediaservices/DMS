@@ -107,7 +107,9 @@ export default function ReviewDocumentsView() {
                       <td className="px-4 py-3 font-medium max-w-xs truncate" title={d.title}>{d.title}</td>
                       <td className="px-3 py-3 tabular-nums">{d.page_count}</td>
                       <td className="px-3 py-3">
-                        {d.in_review_count > 0 ? (
+                        {d.fact_count === 0 ? (
+                          <span className="text-xs text-[#444746]" title="This document has no table values read into fields; check it section by section">—</span>
+                        ) : d.in_review_count > 0 ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-300 text-amber-900 text-xs font-semibold">
                             <Clock className="w-3 h-3" aria-hidden="true" /> {d.in_review_count}
                           </span>
@@ -116,12 +118,14 @@ export default function ReviewDocumentsView() {
                         )}
                       </td>
                       <td className="px-3 py-3">
+                        {d.fact_count === 0 ? <span className="text-xs text-[#444746]">—</span> : (
                         <div className="flex items-center gap-2">
                           <div className="h-1.5 w-24 rounded-full bg-[#e1e3e1] overflow-hidden" role="progressbar" aria-valuenow={d.verified_pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${d.verified_pct}% verified`}>
                             <div className="h-full bg-green-600" style={{ width: `${d.verified_pct}%` }} />
                           </div>
                           <span className="text-xs text-[#444746] tabular-nums">{d.verified_count}/{d.fact_count}</span>
                         </div>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-xs text-[#444746]">
                         {d.last_reviewed_at ? (
@@ -159,7 +163,7 @@ export default function ReviewDocumentsView() {
           )}
         </div>
         <p className="mt-3 text-xs text-[#5f6368]">
-          Only documents whose tables were read by the computer are listed for now. Other documents will appear here later.
+          All scanned documents (PDFs and images) are listed. The value counts apply to documents whose tables were read into fields; the others are checked section by section.
         </p>
       </main>
     </div>

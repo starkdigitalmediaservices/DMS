@@ -22,6 +22,8 @@ interface Props {
   onBoxClick: (target: FocusTarget) => void;
   /** A queue item's source region(s), outlined in amber. */
   focusBoxes?: ReviewBox[];
+  /** Label on that outline. */
+  focusLabel?: string;
 }
 
 const MIN_ZOOM = 0.4;
@@ -44,7 +46,7 @@ const pct = (b: Omit<ReviewBox, "page">) => ({
 });
 
 /** Left pane: the scanned page with every block's box drawn over it. */
-export default function ScanViewer({ documentId, page, pageCount, onPageChange, blocks, selected, hovered, onBoxClick, focusBoxes = [] }: Props) {
+export default function ScanViewer({ documentId, page, pageCount, onPageChange, blocks, selected, hovered, onBoxClick, focusBoxes = [], focusLabel = "queue item" }: Props) {
   const [zoom, setZoom] = useState(1);
   const [src, setSrc] = useState<string | null>(null);
   // Overlays are positioned in % of the image, so nothing can be scrolled
@@ -266,7 +268,7 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
                 className="absolute border-[3px] border-dashed border-amber-500 bg-amber-300/15 pointer-events-none"
                 style={{ ...pct(b), zIndex: 4 }}
               >
-                <span className="absolute -top-5 right-0 px-1.5 text-[10px] font-bold rounded bg-amber-700 text-white">queue item</span>
+                <span className="absolute -top-5 right-0 px-1.5 text-[10px] font-bold rounded bg-amber-700 text-white">{focusLabel}</span>
               </div>
             ))}
             {focusedCellBox && (

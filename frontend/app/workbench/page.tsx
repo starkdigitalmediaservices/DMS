@@ -554,9 +554,10 @@ function WorkbenchRouter() {
         documentId={doc}
         initialPage={Math.max(1, parseInt(params.get("page") || "1", 10) || 1)}
         focusFactId={params.get("fact")}
-        // Arriving to check one value (from the list, or from Entity 360's
-        // "Show on page") opens the focused single-item view.
-        showQueueItem={(fromQueue || fromEntity) && !!params.get("fact")}
+        // Only the "Items to check" list opens the focused single-item view
+        // with its check card. Entity 360's "Show on page" opens the normal
+        // document view with that value outlined and selected.
+        showQueueItem={fromQueue && !!params.get("fact")}
         backHref={fromEntity ? `/entities?node=${encodeURIComponent(entity!)}` : fromQueue ? "/workbench" : "/workbench?tab=documents"}
         backLabel={fromEntity ? "Back to the entity" : fromQueue ? "Back to the list" : "Back to documents"}
       />

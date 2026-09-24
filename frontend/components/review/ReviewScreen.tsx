@@ -262,6 +262,21 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
   // whether it is a table cell here at all -- margin notes, join mismatches
   // and continuation questions are not, so the scan goes to their page.
   const [focusBoxes, setFocusBoxes] = useState<ReviewBox[]>([]);
+  // Without the check card (e.g. arriving from Entity 360) nothing else
+  // loads the value's source region, so fetch it here for the outline.
+  useEffect(() => {
+    if (!focusFactId || showQueueItem) return;
+    let cancelled = false;
+    api.facts.get(focusFactId)
+      .then((f: any) => {
+        if (cancelled) return;
+        setFocusBoxes((f.regions || []).map((r: any) => ({ page: r.page_number, x: r.x0, y: r.y0, w: r.x1 - r.x0, h: r.y1 - r.y0 })));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [focusFactId, showQueueItem]);
   const [focusIsCell, setFocusIsCell] = useState<boolean | null>(null);
   const [focusCell, setFocusCell] = useState<{ blockId: string; rowId: string; col: number } | null>(null);
   // Arriving from the list: show only that one item (card + its outline on
@@ -359,7 +374,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
           <div className="h-[60vh] lg:h-full min-h-0 min-w-0">
             <ScanViewer documentId={documentId} page={Math.min(page, pageCount)} pageCount={pageCount} onPageChange={setPage}
               blocks={focusMode ? NO_BLOCKS : doc.blocks} selected={selected} hovered={hovered} onBoxClick={(t) => select(t, true)}
-              focusBoxes={focusBoxes} />
+              focusBoxes={focusBoxes} focusLabel={showQueueItem ? "queue item" : "this value"} />
           </div>
 
           {/* Drag to give the scan or the extracted text more room (desktop). */}

@@ -139,6 +139,9 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # The review screen reads these from fetch() responses: the export's
+        # file name, and the review version for If-Match.
+        expose_headers=["Content-Disposition", "ETag"],
     )
 
     # API call logging middleware (runs after CORS)

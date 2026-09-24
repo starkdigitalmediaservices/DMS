@@ -409,6 +409,20 @@ export const api = {
       if (!res.ok) throw new ApiError(`Page ${page} image unavailable (${res.status})`, res.status);
       return await res.blob();
     },
+    // The corrected version with each value's status; saved via a blob so
+    // the bearer token is sent (a plain link couldn't carry it).
+    exportFile: async (documentId: string, format: "xlsx" | "csv" | "json"): Promise<{ blob: Blob; filename: string }> => {
+      const token = getAccessToken();
+      const res = await fetch(`${getBaseUrl()}/api/v1/documents/${documentId}/review/export?format=${format}`, {
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "ngrok-skip-browser-warning": "true" },
+      });
+      if (!res.ok) throw new ApiError(`Download failed (${res.status})`, res.status);
+      const cd = res.headers.get("Content-Disposition") || "";
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const plain = /filename="([^"]+)"/i.exec(cd);
+      const filename = star ? decodeURIComponent(star[1]) : plain ? plain[1] : `document.${format}`;
+      return { blob: await res.blob(), filename };
+    },
     history: async (documentId: string, blockId: string, rowId?: string, col?: number): Promise<{ entries: ReviewHistoryEntry[] }> => {
       const params = new URLSearchParams({ block_id: blockId });
       if (rowId) params.set("row_id", rowId);

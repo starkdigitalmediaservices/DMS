@@ -174,3 +174,38 @@ async def test_documents_list_shows_progress_and_respects_scope(world):
     async with _client(w, "op") as c:
         ids = {i["document_id"] for i in (await c.get("/api/v1/review/documents")).json()["items"]}
         assert str(w["doc_A"]) in ids and str(w["doc_B"]) not in ids
+
+
+@pytest.mark.asyncio
+async def test_export_is_the_corrected_version_with_a_status_per_value(world):
+    import csv
+    import io
+
+    import openpyxl
+
+    w = world
+    async with _client(w, "op") as op, _client(w, "auditor") as auditor:
+        doc = (await op.get(_base(w))).json()
+        row_id = doc["blocks"][0]["rows"][0]["id"]
+        r = await op.patch(f"{_base(w)}/blocks/{TABLE}/rows/{row_id}/cells/0", json={"value": "12/8"}, headers={"If-Match": '"1"'})
+        assert r.status_code == 200
+
+        # read-only roles can export
+        r = await auditor.get(f"{_base(w)}/export", params={"format": "csv"})
+        assert r.status_code == 200 and "corrected.csv" in r.headers["content-disposition"]
+        rows = list(csv.DictReader(io.StringIO(r.content.decode("utf-8-sig"))))
+        assert [(x["Field"], x["Value"], x["What the computer read"], x["Status"]) for x in rows] == [
+            ("Survey number", "12/8", "12/3", "Corrected by a person"),
+        ]
+
+        r = await auditor.get(f"{_base(w)}/export", params={"format": "xlsx"})
+        assert r.status_code == 200
+        wb = openpyxl.load_workbook(io.BytesIO(r.content))
+        assert wb.sheetnames[0] == "About" and "All values" in wb.sheetnames
+        table = wb[wb.sheetnames[1]]
+        assert [c.value for c in table[1]] == ["Row", "Page", "Row status", "Survey number", "Survey number - status"]
+        assert [c.value for c in table[2]][3:] == ["12/8", "Corrected by a person"]
+
+        assert (await auditor.get(f"{_base(w)}/export", params={"format": "pdf"})).status_code == 400
+    async with _client(w, "op") as op:
+        assert (await op.get(f"{_base(w, 'doc_B')}/export", params={"format": "csv"})).status_code == 404  # department scope

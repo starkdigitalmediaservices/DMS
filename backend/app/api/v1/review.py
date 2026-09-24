@@ -94,6 +94,18 @@ async def get_page_image(document_id: uuid.UUID, page_number: int,
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
 
+@router.get("/export")
+async def export_review(document_id: uuid.UUID, format: str = "xlsx",
+                        user: TokenPayload = Depends(_read), db: AsyncSession = Depends(get_tenant_db)):
+    """The corrected version, with each value's status (checked / corrected /
+    added / machine-extracted). Anyone who can view the review can export it."""
+    from ...services import review_export
+
+    tenant_id, actor, role = _ctx(user)
+    body, media_type, disposition = await review_export.export_document(db, tenant_id, document_id, actor, role, format)
+    return Response(content=body, media_type=media_type, headers={"Content-Disposition": disposition})
+
+
 @router.get("/history")
 async def get_history(document_id: uuid.UUID, block_id: str, row_id: Optional[str] = None, col: Optional[int] = None,
                       user: TokenPayload = Depends(_read), db: AsyncSession = Depends(get_tenant_db)):

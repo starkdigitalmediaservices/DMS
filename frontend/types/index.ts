@@ -129,6 +129,8 @@ export interface DocumentTableRow {
   stitched: boolean;
   needs_review: boolean;
   values: Record<string, unknown>;
+  /** column -> id of the fact that value came from */
+  fact_ids?: Record<string, string>;
 }
 
 export interface DocumentTableViewResponse {
@@ -138,6 +140,7 @@ export interface DocumentTableViewResponse {
   columns: string[];
   rows: DocumentTableRow[];
   row_count: number;
+  page_count?: number;
 }
 
 export interface DocumentFactsResponse {
@@ -145,6 +148,7 @@ export interface DocumentFactsResponse {
   classification_status: string;
   matched_template_id?: string | null;
   facts: DocumentFact[];
+  page_count?: number;
   stitched_field_count: number;
   in_review_count: number;
 }

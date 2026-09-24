@@ -33,11 +33,14 @@ import {
 } from "lucide-react";
 import { MarkdownViewer } from "../chat/MarkdownViewer";
 import { CitationModal, type CitationModalCitation } from "../search/CitationModal";
-import type { DocumentListItem, DocumentFactsResponse, DocumentTableViewResponse, SearchResult } from "@/types";
+import type { DocumentListItem, DocumentFactsResponse, DocumentTableViewResponse, ReviewBox, SearchResult } from "@/types";
+import ScanViewer from "../review/ScanViewer";
 import { api, isAccessError } from "@/lib/api";
 import { useRole } from "@/lib/permissions";
 
 const NO_ACCESS_MSG = "You don't have access to this document.";
+
+const NO_REVIEW_BLOCKS: never[] = [];
 
 interface DocumentPreviewModalProps {
   isOpen: boolean;
@@ -126,6 +129,31 @@ export function DocumentPreviewModal({
   // with dry-run preview + revert) but had no UI surfacing them next to
   // the extracted data itself; previously only reachable via a separate
   // Workbench trip.
+  // Clicking an extracted value shows where it was read: the left side
+  // switches from the browser's PDF viewer (which can't be drawn on) to the
+  // Workbench scan view, on that page, with the value outlined.
+  const [sourceFact, setSourceFact] = useState<{ factId: string; label: string } | null>(null);
+  const [sourceBoxes, setSourceBoxes] = useState<ReviewBox[]>([]);
+  const [sourcePage, setSourcePage] = useState(1);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  useEffect(() => {
+    setSourceFact(null);
+    setSourceBoxes([]);
+  }, [doc?.id]);
+  const showSource = async (factId: string, label: string) => {
+    setSourceFact({ factId, label });
+    setSourceError(null);
+    setSourceBoxes([]);
+    try {
+      const f: any = await api.facts.get(factId);
+      const boxes: ReviewBox[] = (f.regions || []).map((r: any) => ({ page: r.page_number, x: r.x0, y: r.y0, w: r.x1 - r.x0, h: r.y1 - r.y0 }));
+      setSourceBoxes(boxes);
+      if (boxes.length) setSourcePage(boxes[0].page);
+      else setSourceError("The computer didn't record where on the page this value is.");
+    } catch (e: any) {
+      setSourceError(e?.message || "Couldn't find where this value was read from.");
+    }
+  };
   const [editingFactId, setEditingFactId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [factActionId, setFactActionId] = useState<string | null>(null);
@@ -625,6 +653,35 @@ export function DocumentPreviewModal({
       <div className="flex-1 flex overflow-hidden bg-[#1a1a1a]">
         {/* Document Preview Canvas */}
         <main className="flex-1 overflow-y-auto flex justify-center p-8 relative scrollbar-thin">
+          {sourceFact && doc && (isPdf || isImage) && (
+            <div className="absolute inset-0 z-20 bg-[#1a1a1a] p-4 flex flex-col gap-3" data-testid="source-view">
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-white/10 px-4 py-2 text-sm text-white">
+                <span className="min-w-0 truncate">
+                  <span className="text-white/70">Where this was read: </span>
+                  <span className="font-semibold">{sourceFact.label}</span>
+                  {sourceError && <span className="ml-2 text-amber-300">{sourceError}</span>}
+                </span>
+                <button type="button" onClick={() => setSourceFact(null)}
+                  className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-[#0d2e5c] hover:bg-[#e8f0fe]">
+                  <X className="w-3.5 h-3.5" aria-hidden="true" /> Back to PDF
+                </button>
+              </div>
+              <div className="flex-1 min-h-0">
+                <ScanViewer
+                  documentId={doc.id}
+                  page={sourcePage}
+                  pageCount={tableData?.page_count || factsData?.page_count || Math.max(sourcePage, 1)}
+                  onPageChange={setSourcePage}
+                  blocks={NO_REVIEW_BLOCKS}
+                  selected={null}
+                  hovered={null}
+                  onBoxClick={() => {}}
+                  focusBoxes={sourceBoxes}
+                  focusLabel="selected value"
+                />
+              </div>
+            </div>
+          )}
           {/* PDF Viewer */}
           {isPdf && doc.download_url && (
             <div
@@ -1257,11 +1314,24 @@ export function DocumentPreviewModal({
                               />
                             )}
                           </td>
-                          {tableData.columns.map((col) => (
-                            <td key={col} className="border border-[#e1e3e1] px-2 py-1.5 text-[#1f1f1f] max-w-[220px] truncate" title={String(row.values[col] ?? "")}>
-                              {row.values[col] !== undefined ? String(row.values[col]) : ""}
-                            </td>
-                          ))}
+                          {tableData.columns.map((col) => {
+                            const factId = row.fact_ids?.[col];
+                            const text = row.values[col] !== undefined ? String(row.values[col]) : "";
+                            const active = !!factId && sourceFact?.factId === factId;
+                            return (
+                              <td key={col} className={`border border-[#e1e3e1] p-0 max-w-[220px] ${active ? "outline outline-2 outline-amber-500 -outline-offset-2 bg-amber-50" : ""}`}>
+                                {factId && (isPdf || isImage) ? (
+                                  <button type="button" onClick={() => showSource(factId, `${col}: ${text}`)}
+                                    title={`${text}\n(click to see it on the document)`}
+                                    className="w-full text-left px-2 py-1.5 text-[#1f1f1f] truncate hover:bg-[#e8f0fe] cursor-pointer">
+                                    {text}
+                                  </button>
+                                ) : (
+                                  <span className="block px-2 py-1.5 text-[#1f1f1f] truncate" title={text}>{text}</span>
+                                )}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>
@@ -1334,7 +1404,15 @@ export function DocumentPreviewModal({
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono font-bold text-[#0d2e5c]">{f.field_name}</span>
+                          <span className="flex items-center gap-2 min-w-0">
+                            <span className="font-mono font-bold text-[#0d2e5c]">{f.field_name}</span>
+                            {(isPdf || isImage) && (
+                              <button type="button" onClick={() => showSource(f.fact_id, `${f.field_name}: ${displayValue}`)}
+                                className={`inline-flex items-center gap-1 text-[10px] font-bold hover:underline ${sourceFact?.factId === f.fact_id ? "text-amber-700" : "text-[#0d2e5c]"}`}>
+                                <FileText className="w-3 h-3" aria-hidden="true" /> Show on page
+                              </button>
+                            )}
+                          </span>
                           <div className="flex items-center gap-1 flex-shrink-0">
                             {f.stitched && (
                               <span

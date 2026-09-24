@@ -214,6 +214,7 @@ async def get_facts_for_document(db: AsyncSession, document_id: UUID, tenant_id:
         "classification_status": doc.classification_status,
         "matched_template_id": str(doc.matched_template_id) if doc.matched_template_id else None,
         "facts": facts_out,
+        "page_count": doc.pages_total_count or 0,
         "stitched_field_count": sum(1 for f in facts_out if f["stitched"]),
         "in_review_count": sum(1 for f in facts_out if f["status"] == "in_review"),
     }
@@ -358,10 +359,14 @@ async def get_table_view_for_document(db: AsyncSession, document_id: UUID, tenan
     rows_out = []
     for cluster in clusters:
         row: dict = {}
+        # Which fact each column came from, so a client can show exactly
+        # that value on the scan (Drive preview: click a cell -> outlined).
+        row_fact_ids: dict = {}
         row_stitched = False
         row_needs_review = False
         for fact in cluster["facts"]:
             row[fact.field_name] = _unwrap_fact_value(fact.value)
+            row_fact_ids[fact.field_name] = str(fact.id)
             if len({r.page_id for r in fact.regions}) > 1:
                 row_stitched = True
             if fact.status == "in_review":
@@ -376,6 +381,7 @@ async def get_table_view_for_document(db: AsyncSession, document_id: UUID, tenan
             # is visibly flagged, not indistinguishable from a normal one.
             "needs_review": row_needs_review,
             "values": row,
+            "fact_ids": row_fact_ids,
         })
 
     # Any field seen but absent from the template's own schema (e.g. a
@@ -393,4 +399,5 @@ async def get_table_view_for_document(db: AsyncSession, document_id: UUID, tenan
         "columns": columns,
         "rows": rows_out,
         "row_count": len(rows_out),
+        "page_count": doc.pages_total_count or 0,
     }

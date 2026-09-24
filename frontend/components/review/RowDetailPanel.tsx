@@ -94,10 +94,12 @@ export default function RowDetailPanel({ block, row, editMode, canVerify, busy, 
               ) : (
                 <button
                   type="button"
-                  onClick={() => {
-                    onSelect({ blockId: block.id, rowId: row.id, col });
-                    if (editMode && !row.deleted && !busy) setEditingCol(col);
+                  onClick={() => onSelect({ blockId: block.id, rowId: row.id, col })}
+                  onDoubleClick={() => { if (editMode && !row.deleted && !busy) setEditingCol(col); }}
+                  onKeyDown={(e) => {
+                    if (editMode && !row.deleted && !busy && (e.key === "Enter" || e.key === "F2")) { e.preventDefault(); setEditingCol(col); }
                   }}
+                  title={editMode && !row.deleted ? "Double-click to correct" : undefined}
                   className={`w-full text-left whitespace-pre-wrap break-words ${editMode && !row.deleted ? "cursor-text" : "cursor-pointer"}`}
                 >
                   {cell.text || <span className="text-[#5f6368] italic">blank</span>}

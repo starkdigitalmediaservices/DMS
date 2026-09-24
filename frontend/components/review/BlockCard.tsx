@@ -205,8 +205,15 @@ const TableRow = memo(function TableRow({
             ) : (
               <button
                 type="button"
-                onClick={() => openCell(row, col)}
-                title={cell.low_confidence ? `The computer is unsure about this (${Math.round((cell.confidence || 0) * 100)}% sure)` : undefined}
+                onClick={() => onSelect({ blockId: block.id, rowId: row.id, col })}
+                onDoubleClick={() => openCell(row, col)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === "F2") { e.preventDefault(); openCell(row, col); }
+                }}
+                title={[
+                  cell.low_confidence ? `The computer is unsure about this (${Math.round((cell.confidence || 0) * 100)}% sure)` : "",
+                  editMode && !row.deleted ? "Double-click to correct" : "",
+                ].filter(Boolean).join(" · ") || undefined}
                 className={`w-full text-left ${editMode && !row.deleted ? "cursor-text" : "cursor-pointer"}`}
               >
                 <CellView cell={cell} />
@@ -359,7 +366,7 @@ function TableBody({ block, editMode, canVerify, busy, filter, selected, onSelec
       {visibleRows.length === 0 && <p className="px-2 py-3 text-xs text-[#5f6368]">No rows match this filter.</p>}
       {editMode && (
         <button type="button" disabled={busy} onClick={() => actions.addRow(block, null)}
-          className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#0d2e5c] hover:underline disabled:opacity-40">
+          className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#0d2e5c] hover:underline disabled:opacity-40 lg:opacity-0 lg:group-hover/card:opacity-100 lg:focus-visible:opacity-100">
           <Plus className="w-3.5 h-3.5" /> Add a missing row
         </button>
       )}
@@ -367,7 +374,7 @@ function TableBody({ block, editMode, canVerify, busy, filter, selected, onSelec
   );
 }
 
-function TextBody({ block, editMode, busy, actions }: Props) {
+function TextBody({ block, editMode, busy, actions, onSelect }: Props) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(block.text || "");
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -402,7 +409,13 @@ function TextBody({ block, editMode, busy, actions }: Props) {
   }
   const Tag = block.type === "heading" ? "h3" : "p";
   return (
-    <button type="button" disabled={!editMode || block.deleted || busy} onClick={() => setEditing(true)}
+    <button type="button" disabled={block.deleted || busy}
+      onClick={() => onSelect({ blockId: block.id })}
+      onDoubleClick={() => editMode && !block.deleted && setEditing(true)}
+      onKeyDown={(e) => {
+        if (editMode && (e.key === "Enter" || e.key === "F2")) { e.preventDefault(); setEditing(true); }
+      }}
+      title={editMode && !block.deleted ? "Double-click to correct" : undefined}
       className={`w-full text-left rounded ${editMode && !block.deleted ? "cursor-text hover:bg-[#f8f9fa]" : "cursor-default"} ${block.edited ? "bg-amber-50 border-l-2 border-amber-400 pl-2" : ""}`}>
       <Tag className={`whitespace-pre-wrap ${block.type === "heading" ? "font-bold text-base" : "text-sm"} ${block.deleted ? "line-through" : ""}`}>
         {block.text || <span className="text-[#5f6368] italic">blank</span>}
@@ -425,7 +438,7 @@ function BlockCard(props: Props) {
       aria-label={`Block ${block.order + 1}: ${block.title || block.type}`}
       onMouseEnter={() => onHover({ blockId: block.id })}
       onMouseLeave={() => onHover(null)}
-      className={`rounded-xl border bg-white p-3 transition-shadow ${isSelected ? "ring-2 ring-[#0d2e5c] shadow-md" : "border-[#e1e3e1]"} ${block.deleted ? "opacity-70" : ""}`}
+      className={`group/card rounded-xl border bg-white p-3 transition-shadow ${isSelected ? "ring-2 ring-[#0d2e5c] shadow-md" : "border-[#e1e3e1]"} ${block.deleted ? "opacity-70" : ""}`}
     >
       <header className="flex flex-wrap items-center gap-2 mb-2">
         <button type="button" onClick={() => onSelect({ blockId: block.id })}
@@ -485,7 +498,7 @@ function BlockCard(props: Props) {
 
       {editMode && (
         <button type="button" disabled={busy} onClick={() => actions.addBlock(block)}
-          className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#0d2e5c] hover:underline disabled:opacity-40">
+          className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#0d2e5c] hover:underline disabled:opacity-40 lg:opacity-0 lg:group-hover/card:opacity-100 lg:focus-visible:opacity-100">
           <Plus className="w-3.5 h-3.5" /> Add missing text here
         </button>
       )}

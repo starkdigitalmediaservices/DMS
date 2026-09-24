@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertCircle, ArrowLeft, FileSearch, Loader2, Pencil, RefreshCw, RotateCcw, X, Eye } from "lucide-react";
+import { AlertCircle, ArrowLeft, FileSearch, Loader2, RefreshCw, RotateCcw, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { isAuthenticated } from "@/lib/auth";
 import { ConfirmModal } from "@/components/ui/ConfirmModal";
@@ -99,7 +99,8 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [page, setPage] = useState(initialPage);
-  const [editMode, setEditMode] = useState(false);
+  // No edit toggle: anyone allowed to edit corrects a value by
+  // double-clicking it (single click only selects / highlights).
   const [tab, setTab] = useState<"sections" | "text">("sections");
   const [filter, setFilter] = useState<ReviewFilter>("all");
   const [selected, setSelected] = useState<FocusTarget | null>(null);
@@ -178,6 +179,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
   }, [documentId, load, router]);
 
   const pageCount = doc?.page_count || 1;
+  const editMode = !!doc?.permissions.can_edit;
 
   /** Runs one mutation; on success shows exactly what the server saved. */
   const run = useCallback(async (fn: (version: number) => Promise<ReviewDocument>): Promise<boolean> => {
@@ -322,13 +324,6 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
           </>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {doc?.permissions.can_edit && !focusMode && (
-            <button type="button" aria-pressed={editMode} onClick={() => setEditMode((m) => !m)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border ${editMode ? "bg-[#0d2e5c] text-white border-[#0d2e5c]" : "bg-white text-[#0d2e5c] border-[#0d2e5c]"}`}>
-              {editMode ? <Pencil className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              {editMode ? "Done editing" : "Start editing"}
-            </button>
-          )}
           {doc?.permissions.can_revert_all && !focusMode && (
             <button type="button" disabled={busy || doc.is_clean} onClick={() => setConfirmRevertAll(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-300 text-red-800 hover:bg-red-50 disabled:opacity-40">
@@ -444,6 +439,9 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
                 <DigitisedText blocks={doc.blocks} />
               ) : (
                 <>
+                  {editMode && doc.blocks.length > 0 && (
+                    <p className="text-xs text-[#444746]">Double-click any value or text to correct it. Press Enter to save, Esc to cancel.</p>
+                  )}
                   {doc.blocks.length === 0 && (
                     <p className="text-sm text-[#5f6368] bg-white rounded-xl border border-[#e1e3e1] p-4">
                       No extracted blocks for this document yet (it has no template extraction). You can still add text blocks in edit mode.

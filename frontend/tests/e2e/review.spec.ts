@@ -56,11 +56,14 @@ test("click box on scan -> card highlights -> edit cell -> undo", async ({ page 
   await expect(highlighted).toHaveCount(1);
   await expect(highlighted).toBeInViewport();
 
-  // Edit a not-yet-edited cell of that row.
-  await page.getByRole("button", { name: "Start editing" }).click();
+  // No edit toggle: the button is gone, a single click only selects, a
+  // double-click opens the editor.
+  await expect(page.getByRole("button", { name: /Start editing|Done editing/ })).toHaveCount(0);
   const cell = highlighted.locator("[data-testid=review-cell][data-edited=false]").first();
   const original = (await cell.locator("button").first().innerText()).trim();
   await cell.locator("button").first().click();
+  await expect(page.locator("textarea[aria-label^='Edit ']")).toHaveCount(0);
+  await cell.locator("button").first().dblclick();
   const editor = page.locator("textarea[aria-label^='Edit ']");
   await editor.fill("E2E-REVIEW-VALUE");
   await editor.press("Enter");

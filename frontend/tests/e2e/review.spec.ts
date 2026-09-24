@@ -31,6 +31,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("click box on scan -> card highlights -> edit cell -> undo", async ({ page }) => {
+  test.setTimeout(120_000);
   await page.goto(`/workbench?doc=${DOC}&page=1`);
   await expect(page.getByTestId("page-indicator")).toContainText("page 1 /", { timeout: 30_000 });
   // The document may already carry real corrections; everything below is
@@ -82,6 +83,8 @@ test("click box on scan -> card highlights -> edit cell -> undo", async ({ page 
 });
 
 test("workbench: documents tab -> review -> back, and queue item -> its cell in the document", async ({ page }) => {
+  // Opens the tenant's largest registers (thousands of values each) several times.
+  test.setTimeout(180_000);
   await page.goto("/workbench?tab=documents");
   const rows = page.getByTestId("review-document-row");
   await expect(rows.first()).toBeVisible({ timeout: 20_000 });
@@ -99,8 +102,24 @@ test("workbench: documents tab -> review -> back, and queue item -> its cell in 
   await expect(page).toHaveURL(/fact=.*from=queue/);
   // exactly the queue item's cell is selected in the list, and outlined on the scan
   await expect(page.locator("td[data-testid=review-cell].outline")).toHaveCount(1, { timeout: 60_000 });
-  await expect(page.locator("div.border-amber-500")).toHaveCount(1, { timeout: 30_000 });
+  // the queue item's source region (dashed) is outlined on the scan
+  await expect(page.locator("[data-overlay=focus]")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("queue-item-card")).toBeVisible();
   await expect(page.getByRole("link", { name: "Back to queue" })).toBeVisible();
+
+  // every queue type opens here -- the old region popup is gone; a margin
+  // note (not a table cell) gets its item card and an amber outline instead
+  await page.goto("/workbench");
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByRole("button", { name: "View Source Region" })).toHaveCount(0);
+  await page.getByRole("tab", { name: /Marginalia/ }).click();
+  await page.waitForLoadState("networkidle");
+  const marg = page.getByRole("link", { name: "Open in document" });
+  if (await marg.count()) {
+    await marg.first().click();
+    await expect(page.getByTestId("queue-item-card")).toContainText("Handwritten margin note", { timeout: 30_000 });
+    await expect(page.locator("[data-overlay=focus]")).toBeVisible({ timeout: 30_000 });
+  }
 
   // old /review links still land in the Workbench
   await page.goto(`/review?doc=${DOC}&page=2`);

@@ -28,10 +28,10 @@ import {
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import RegionHighlightViewer from "@/components/drive/RegionHighlightViewer";
 import type { FolderTreeNode } from "@/types";
 import { useI18n } from "@/lib/i18n";
 import { useRole } from "@/lib/permissions";
+import { sentinelLabel } from "@/lib/factLabels";
 import WorkbenchTabs from "@/components/workbench/WorkbenchTabs";
 import ReviewDocumentsView from "@/components/workbench/ReviewDocumentsView";
 import ReviewScreen from "@/components/review/ReviewScreen";
@@ -105,17 +105,10 @@ function QueueWorkbench() {
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  // T53 — click-through from a fact to its highlighted source region.
-  const [viewingSourceFactId, setViewingSourceFactId] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [categoryCounts, setCategoryCounts] = useState<Partial<Record<Category, number>>>({});
 
-  const fieldLabel = useCallback((fieldName: string): string => {
-    if (fieldName === "_marginalia") return t("workbench.sentinel.marginalia", "Handwritten margin note");
-    if (fieldName === "_join_mismatch") return t("workbench.sentinel.join_mismatch", "Table join couldn't be matched");
-    if (fieldName === "_stitch_ambiguous") return t("workbench.sentinel.stitch_ambiguous", "Table continuation unclear");
-    return fieldName;
-  }, [t]);
+  const fieldLabel = useCallback((fieldName: string): string => sentinelLabel(fieldName, t), [t]);
 
   const categoryTabs: CategoryTab[] = useMemo(() => [
     {
@@ -344,19 +337,6 @@ function QueueWorkbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Escape previously did nothing for the View Source modal — its
-  // full-screen backdrop stayed up and kept intercepting every click
-  // until the X button or a backdrop click dismissed it. Confirmed live
-  // this was genuinely disorienting (the near-universal "Esc closes a
-  // dialog" reflex silently broke the page).
-  useEffect(() => {
-    if (!viewingSourceFactId) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setViewingSourceFactId(null);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [viewingSourceFactId]);
 
   const selected = facts[selectedIndex] || null;
 
@@ -421,7 +401,7 @@ function QueueWorkbench() {
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
-      } else if ((e.key === "o" || e.key === "O") && facts[selectedIndex] && !facts[selectedIndex].field_name.startsWith("_")) {
+      } else if ((e.key === "o" || e.key === "O") && facts[selectedIndex]) {
         router.push(openInDocumentHref(facts[selectedIndex]));
       } else if (!canReview) {
         // Read-only roles: navigation only, no review shortcuts.
@@ -683,23 +663,18 @@ function QueueWorkbench() {
                     minimum a finger needs) without shrinking them back down
                     on the mouse-driven two-column desktop layout. */}
                 <div className="flex flex-wrap gap-2 pt-2">
-                  {/* Table values open in the full document review, on this
-                      cell; marginalia / join-mismatch / stitch items are not
-                      table cells there, so they keep the region popup only. */}
-                  {!selected.field_name.startsWith("_") && (
-                    <Link
-                      href={openInDocumentHref(selected)}
-                      className="inline-flex items-center rounded-lg bg-[#0d2e5c] px-3 h-8 max-lg:h-11 max-lg:px-4 text-xs font-semibold text-white hover:bg-[#0945a5]"
-                      title="Open the whole document with its scan, on this value (shortcut: O)"
-                    >
-                      <FileText className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
-                      Open in document
-                    </Link>
-                  )}
-                  <Button size="sm" className="max-lg:h-11 max-lg:px-4" variant="secondary" onClick={() => setViewingSourceFactId(selected.fact_id)} title="See exactly where this value was read from on the original page">
-                    <Eye className="w-3.5 h-3.5 mr-1.5" />
-                    {t("workbench.btn.view_source", "View Source")}
-                  </Button>
+                  {/* Every queue item opens in the full document view: its page,
+                      its source region outlined on the scan, and (for table
+                      values) its cell selected -- this replaced the small
+                      "View Source" region popup. */}
+                  <Link
+                    href={openInDocumentHref(selected)}
+                    className="inline-flex items-center rounded-lg bg-[#0d2e5c] px-3 h-8 max-lg:h-11 max-lg:px-4 text-xs font-semibold text-white hover:bg-[#0945a5]"
+                    title="Open the whole document with its scan, on this item's source region (shortcut: O)"
+                  >
+                    <FileText className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
+                    Open in document
+                  </Link>
                   {canReview && (<>
                   <Button
                     size="sm" className="max-lg:h-11 max-lg:px-4" variant="secondary" loading={actionLoading}
@@ -944,34 +919,6 @@ function QueueWorkbench() {
         </div>
       </main>
 
-      {viewingSourceFactId && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-2 sm:p-4">
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-xs"
-            aria-hidden="true"
-            onClick={() => setViewingSourceFactId(null)}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="source-modal-title"
-            className="relative z-10 w-full max-w-5xl max-h-[90vh] sm:max-h-[85vh] overflow-y-auto bg-white border border-[#e1e3e1] rounded-2xl sm:rounded-3xl shadow-2xl text-[#1f1f1f] p-4 sm:p-6"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h3 id="source-modal-title" className="text-lg font-bold">{t("workbench.btn.view_source", "Source Document Region")}</h3>
-              <button
-                type="button"
-                onClick={() => setViewingSourceFactId(null)}
-                aria-label="Close source view dialog"
-                className="p-2.5 -m-1 text-[#747775] hover:text-[#1f1f1f] rounded-full hover:bg-[#f0f4f9]"
-              >
-                <X className="w-5 h-5" aria-hidden="true" />
-              </button>
-            </div>
-            <RegionHighlightViewer factId={viewingSourceFactId} renderWidth={900} />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -992,6 +939,7 @@ function WorkbenchRouter() {
         documentId={doc}
         initialPage={Math.max(1, parseInt(params.get("page") || "1", 10) || 1)}
         focusFactId={params.get("fact")}
+        showQueueItem={fromQueue && !!params.get("fact")}
         backHref={fromQueue ? "/workbench" : "/workbench?tab=documents"}
         backLabel={fromQueue ? "Back to queue" : "Back to documents"}
       />

@@ -1,14 +1,21 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { cookies } from "next/headers";
-import { Noto_Sans_Devanagari } from "next/font/google";
+import localFont from "next/font/local";
 import { I18nProvider } from "@/lib/i18n";
 import { LOCALE_COOKIE_KEY, SUPPORTED_LOCALES } from "@/lib/locale";
 import { OnlineStatusProvider } from "@/hooks/useOnlineStatus";
 
-const notoSansDevanagari = Noto_Sans_Devanagari({
-  subsets: ["devanagari", "latin"],
-  weight: ["400", "500", "600", "700"],
+// Bundled (app/fonts, SIL OFL 1.1) rather than next/font/google: the google
+// loader downloads the font at BUILD time, so every frontend build needed
+// internet access -- a dropped connection failed the whole build and took the
+// container down (twice on 2026-09-24), and an air-gapped install could never
+// build at all. One variable file covers Devanagari + Latin, weights 400-700.
+const notoSansDevanagari = localFont({
+  src: "./fonts/NotoSansDevanagari-Variable.ttf",
+  weight: "400 700",
+  style: "normal",
+  display: "swap",
   variable: "--font-noto-devanagari",
 });
 

@@ -20,6 +20,8 @@ interface Props {
   selected: FocusTarget | null;
   hovered: FocusTarget | null;
   onBoxClick: (target: FocusTarget) => void;
+  /** A queue item's source region(s), outlined in amber. */
+  focusBoxes?: ReviewBox[];
 }
 
 const MIN_ZOOM = 0.4;
@@ -42,7 +44,7 @@ const pct = (b: Omit<ReviewBox, "page">) => ({
 });
 
 /** Left pane: the scanned page with every block's box drawn over it. */
-export default function ScanViewer({ documentId, page, pageCount, onPageChange, blocks, selected, hovered, onBoxClick }: Props) {
+export default function ScanViewer({ documentId, page, pageCount, onPageChange, blocks, selected, hovered, onBoxClick, focusBoxes = [] }: Props) {
   const [zoom, setZoom] = useState(1);
   const [src, setSrc] = useState<string | null>(null);
   // Overlays are positioned in % of the image, so nothing can be scrolled
@@ -114,6 +116,15 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
   const isActive = (t: FocusTarget, ref: FocusTarget | null) =>
     !!ref && ref.blockId === t.blockId && (t.rowId === undefined ? ref.rowId === undefined : ref.rowId === t.rowId);
 
+  const focusOnPage = focusBoxes.filter((b) => b.page === page);
+
+  // With nothing selected, bring the queue item's region into view.
+  useEffect(() => {
+    if (selected || !imgLoaded || !focusOnPage.length || !scroller.current) return;
+    scroller.current.querySelector<HTMLElement>("[data-overlay=focus]")?.scrollIntoView({ block: "center", inline: "center" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imgLoaded, page, focusBoxes, selected]);
+
   // Scroll the selected box into view when selection comes from the card list.
   useEffect(() => {
     if (!selected || !scroller.current || !imgLoaded) return;
@@ -124,6 +135,22 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
   }, [selected, page, imgLoaded]);
 
   const setZoomClamped = useCallback((z: number) => setZoom(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100))), []);
+
+  // Ctrl+wheel and trackpad pinch (which browsers report as ctrl+wheel) zoom
+  // the scan, not the whole page. React's onWheel is a passive listener, so
+  // its preventDefault() is ignored and the browser zoomed the entire page;
+  // a native non-passive listener is the only way to stop that.
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      setZoom((z) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round((z - Math.sign(e.deltaY) * 0.1) * 100) / 100)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (!scroller.current || e.button !== 0) return;
@@ -179,17 +206,11 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
 
       <div
         ref={scroller}
-        className="relative flex-1 min-h-0 overflow-auto cursor-grab active:cursor-grabbing select-none"
+        className="relative flex-1 min-h-0 overflow-auto cursor-grab active:cursor-grabbing select-none touch-pan-x touch-pan-y"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerLeave={endDrag}
-        onWheel={(e) => {
-          if (e.ctrlKey) {
-            e.preventDefault();
-            setZoomClamped(zoom - Math.sign(e.deltaY) * 0.1);
-          }
-        }}
       >
         {error && <p role="alert" className="p-6 text-sm text-red-700">{error}</p>}
         {!src && !error && (
@@ -229,6 +250,17 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
                 </button>
               );
             })}
+            {focusOnPage.map((b, i) => (
+              <div
+                key={`focus-${i}`}
+                data-overlay={i === 0 ? "focus" : undefined}
+                aria-hidden="true"
+                className="absolute border-[3px] border-dashed border-amber-500 bg-amber-300/15 pointer-events-none"
+                style={{ ...pct(b), zIndex: 4 }}
+              >
+                <span className="absolute -top-5 right-0 px-1.5 text-[10px] font-bold rounded bg-amber-700 text-white">queue item</span>
+              </div>
+            ))}
             {focusedCellBox && (
               <div aria-hidden="true" className="absolute border-2 border-amber-500 bg-amber-300/30 pointer-events-none" style={{ ...pct(focusedCellBox), zIndex: 3 }} />
             )}

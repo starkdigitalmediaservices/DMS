@@ -7,6 +7,7 @@ import uuid
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,9 +39,11 @@ def _ctx(user: TokenPayload):
     return uuid.UUID(user.tenant_id), uuid.UUID(user.sub), user.role
 
 
-def _respond(response: Response, doc: dict) -> dict:
-    response.headers["ETag"] = doc["etag"]
-    return doc
+def _respond(response: Response, doc: dict) -> JSONResponse:
+    # The review document is already plain JSON types. Returning it straight
+    # skips FastAPI's generic jsonable_encoder walk, which took longer than
+    # building the document itself for a ~6,300-cell register (3.6 MB).
+    return JSONResponse(content=doc, headers={"ETag": doc["etag"]})
 
 
 class TextEdit(BaseModel):

@@ -8,7 +8,10 @@ import { isAuthenticated } from "@/lib/auth";
 import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import ScanViewer, { type FocusTarget } from "@/components/review/ScanViewer";
 import BlockCard, { blockMatches, type BlockActions, type ReviewFilter } from "@/components/review/BlockCard";
-import type { ReviewBlock, ReviewDocument, ReviewHistoryEntry, ReviewRow } from "@/types";
+import QueueItemCard from "@/components/review/QueueItemCard";
+import RowDetailPanel from "@/components/review/RowDetailPanel";
+import { useRole } from "@/lib/permissions";
+import type { ReviewBlock, ReviewBox, ReviewDocument, ReviewHistoryEntry, ReviewRow } from "@/types";
 
 type Banner = { kind: "error" | "conflict"; message: string } | null;
 
@@ -60,12 +63,15 @@ export interface ReviewScreenProps {
   /** Open with this fact's cell selected (and its page shown) -- used when
    *  arriving from a Workbench queue item. */
   focusFactId?: string | null;
+  /** Arrived from a Workbench queue item: pin it above the blocks with its actions. */
+  showQueueItem?: boolean;
   backHref: string;
   backLabel: string;
 }
 
 /** The document review view: scan on the left, extracted blocks on the right. */
-export default function ReviewScreen({ documentId, initialPage = 1, focusFactId, backHref, backLabel }: ReviewScreenProps) {
+export default function ReviewScreen({ documentId, initialPage = 1, focusFactId, showQueueItem = false, backHref, backLabel }: ReviewScreenProps) {
+  const { can: roleCan } = useRole();
   const router = useRouter();
 
   const [doc, setDoc] = useState<ReviewDocument | null>(null);
@@ -81,8 +87,52 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
   const [banner, setBanner] = useState<Banner>(null);
   const [confirmRevertAll, setConfirmRevertAll] = useState(false);
   const [history, setHistory] = useState<{ label: string; entries: ReviewHistoryEntry[] | null } | null>(null);
+  // Row opened as a vertical field list (ids only: the row itself is always
+  // read from the latest document, so it shows exactly what was saved).
+  const [detail, setDetail] = useState<{ blockId: string; rowId: string } | null>(null);
   const [addAfter, setAddAfter] = useState<{ block: ReviewBlock | null; type: "heading" | "paragraph"; text: string } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // Height of the scrolling block list, so a table's own scroll box can be
+  // sized to fit inside it and keep its horizontal scrollbar on screen.
+  const [listH, setListH] = useState(0);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setListH(el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [doc]);
+
+  // Scan / extracted-text split, in % of the width for the scan; remembered
+  // per browser (a convenience, so storage failures are ignored).
+  const splitRef = useRef<HTMLElement>(null);
+  const [split, setSplit] = useState(50);
+  useEffect(() => {
+    try {
+      const saved = parseFloat(localStorage.getItem("review_split") || "");
+      if (saved >= 25 && saved <= 75) setSplit(saved);
+    } catch {}
+  }, []);
+  const setSplitSaved = useCallback((v: number) => {
+    const clamped = Math.min(75, Math.max(25, v));
+    setSplit(clamped);
+    try {
+      localStorage.setItem("review_split", String(clamped));
+    } catch {}
+  }, []);
+  const startSplitDrag = (e: React.PointerEvent) => {
+    const main = splitRef.current;
+    if (!main) return;
+    e.preventDefault();
+    const rect = main.getBoundingClientRect();
+    const move = (ev: PointerEvent) => setSplitSaved(((ev.clientX - rect.left) / rect.width) * 100);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -166,6 +216,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
       run((v) => api.review.verify(documentId, v, { block_id: block.id, row_id: row.id, verified, fact_versions: factVersions }));
     },
     verifyBlock: (block, verified) => { run((v) => api.review.verify(documentId, v, { block_id: block.id, verified })); },
+    openRowDetail: (block, row) => setDetail({ blockId: block.id, rowId: row.id }),
     showHistory: async ({ block_id, row_id, col, label }) => {
       setHistory({ label, entries: null });
       try {
@@ -178,7 +229,19 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
     },
   }), [documentId, run]);
 
+  const detailBlock = detail ? doc?.blocks.find((b) => b.id === detail.blockId) : undefined;
+  const detailRow = detail ? detailBlock?.rows?.find((r) => r.id === detail.rowId) : undefined;
+
   const visibleBlocks = useMemo(() => (doc?.blocks || []).filter((b) => b.deleted || blockMatches(b, filter)), [doc, filter]);
+
+  // Where the queue item was read from (outlined in amber on the scan), and
+  // whether it is a table cell here at all -- margin notes, join mismatches
+  // and continuation questions are not, so the scan goes to their page.
+  const [focusBoxes, setFocusBoxes] = useState<ReviewBox[]>([]);
+  const [focusIsCell, setFocusIsCell] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (focusIsCell === false && focusBoxes.length) setPage(focusBoxes[0].page);
+  }, [focusIsCell, focusBoxes]);
 
   // Arriving from a queue item: select that fact's cell once, show its page,
   // and scroll its row into view.
@@ -190,13 +253,14 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
       for (const row of block.rows || []) {
         const col = row.cells.findIndex((c) => c.fact_id === focusFactId);
         if (col >= 0) {
+          setFocusIsCell(true);
           select({ blockId: block.id, rowId: row.id, col });
           setTimeout(() => document.getElementById(`row-${block.id}-${row.id}`)?.scrollIntoView({ block: "center" }), 150);
           return;
         }
       }
     }
-    setBanner({ kind: "error", message: "That value isn't one of this document's table cells, so it can't be highlighted here." });
+    setFocusIsCell(false);
   }, [doc, focusFactId, select]);
 
   if (!documentId) {
@@ -256,13 +320,57 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
       ) : loadError ? (
         <p role="alert" className="p-8 text-sm text-red-700">{loadError}</p>
       ) : doc ? (
-        <main className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-3 p-3 sm:p-4 overflow-y-auto lg:overflow-hidden">
+        <main
+          ref={splitRef}
+          className="flex-1 min-h-0 grid grid-cols-1 lg:[grid-template-columns:var(--split)_12px_1fr] gap-3 lg:gap-0 p-3 sm:p-4 overflow-y-auto lg:overflow-hidden"
+          style={{ ["--split" as any]: `${split}%` }}
+        >
           <div className="h-[60vh] lg:h-full min-h-0 min-w-0">
             <ScanViewer documentId={documentId} page={Math.min(page, pageCount)} pageCount={pageCount} onPageChange={setPage}
-              blocks={doc.blocks} selected={selected} hovered={hovered} onBoxClick={(t) => select(t, true)} />
+              blocks={doc.blocks} selected={selected} hovered={hovered} onBoxClick={(t) => select(t, true)}
+              focusBoxes={focusBoxes} />
           </div>
 
+          {/* Drag to give the scan or the extracted text more room (desktop). */}
+          <button
+            type="button"
+            aria-label={`Resize: scan takes ${Math.round(split)}% of the width. Drag, or use the left and right arrow keys.`}
+            onPointerDown={startSplitDrag}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowLeft") setSplitSaved(split - 5);
+              if (e.key === "ArrowRight") setSplitSaved(split + 5);
+            }}
+            className="hidden lg:flex items-center justify-center cursor-col-resize group focus:outline-none touch-none"
+          >
+            <span aria-hidden="true" className="h-12 w-1 rounded-full bg-[#c4c7c5] group-hover:bg-[#0d2e5c] group-focus:bg-[#0d2e5c]" />
+          </button>
+
           <section aria-label="Extracted content" className="flex flex-col min-h-0 min-w-0">
+            {showQueueItem && focusFactId && (
+              <div className="mb-2">
+                <QueueItemCard factId={focusFactId} docVersion={doc?.version} canReview={roleCan("facts.review")} onRegions={setFocusBoxes} onChanged={load} />
+              </div>
+            )}
+            {detailBlock && detailRow && tab === "sections" && (
+              <div className="mb-2">
+                <RowDetailPanel
+                  block={detailBlock}
+                  row={detailRow}
+                  editMode={editMode}
+                  canVerify={doc?.permissions.can_verify ?? false}
+                  busy={busy}
+                  actions={actions}
+                  onSelect={select}
+                  onHover={setHovered}
+                  onNavigate={(r) => {
+                    setDetail({ blockId: detailBlock.id, rowId: r.id });
+                    select({ blockId: detailBlock.id, rowId: r.id });
+                    document.getElementById(`row-${detailBlock.id}-${r.id}`)?.scrollIntoView({ block: "nearest" });
+                  }}
+                  onClose={() => setDetail(null)}
+                />
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2 mb-2">
               <div role="tablist" aria-label="View" className="flex gap-1">
                 {(["sections", "text"] as const).map((k) => (
@@ -283,7 +391,8 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
               )}
             </div>
 
-            <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
+            <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1"
+              style={listH ? ({ ["--list-h" as any]: `${listH}px` } as React.CSSProperties) : undefined}>
               {tab === "text" ? (
                 <DigitisedText blocks={doc.blocks} />
               ) : (
@@ -295,7 +404,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
                   )}
                   {visibleBlocks.map((block) => (
                     <BlockCard key={block.id} block={block} editMode={editMode} canVerify={doc.permissions.can_verify} busy={busy}
-                      filter={filter} selected={selected} onSelect={(t) => select(t)} onHover={setHovered} actions={actions} />
+                      filter={filter} selected={selected} onSelect={select} onHover={setHovered} actions={actions} />
                   ))}
                   {editMode && (
                     <button type="button" disabled={busy} onClick={() => setAddAfter({ block: null, type: "paragraph", text: "" })}

@@ -344,12 +344,33 @@ def _original_index(original: ReviewOriginal) -> Tuple[Dict[str, Dict], Dict[Tup
     return blocks, rows, cells_by_fact
 
 
-async def _load_facts(db: AsyncSession, tenant_id: UUID, state_blocks: List[Dict[str, Any]]) -> Dict[str, Fact]:
-    ids = [UUID(c["fact_id"]) for b in state_blocks for r in b.get("rows", []) for c in r["cells"] if c.get("fact_id")]
+async def _load_facts(db: AsyncSession, tenant_id: UUID, document_id: UUID, state_blocks: List[Dict[str, Any]]) -> Dict[str, Fact]:
+    """The facts the review state references, keyed by id. Selected by
+    document, not by an IN-list of ids: a 68-page register references ~6,300
+    facts, and one bind parameter per id made this query alone take ~3s."""
+    ids = {c["fact_id"] for b in state_blocks for r in b.get("rows", []) for c in r["cells"] if c.get("fact_id")}
     if not ids:
         return {}
-    res = await db.execute(select(Fact).where(Fact.tenant_id == tenant_id, Fact.id.in_(ids)))
-    return {str(f.id): f for f in res.scalars().all()}
+    res = await db.execute(select(Fact).where(Fact.tenant_id == tenant_id, Fact.document_id == document_id))
+    return {str(f.id): f for f in res.scalars().all() if str(f.id) in ids}
+
+
+class _FactView:
+    """Read-only slice of a fact row -- all get_review_document needs.
+    Building full ORM objects for a ~6,300-fact register took ~2.4s alone."""
+    __slots__ = ("id", "field_name", "value", "status", "confidence", "edit_version")
+
+    def __init__(self, id, field_name, value, status, confidence, edit_version):
+        self.id, self.field_name, self.value = id, field_name, value
+        self.status, self.confidence, self.edit_version = status, confidence, edit_version
+
+
+async def _read_facts(db: AsyncSession, tenant_id: UUID, document_id: UUID) -> Dict[str, "_FactView"]:
+    res = await db.execute(
+        select(Fact.id, Fact.field_name, Fact.value, Fact.status, Fact.confidence, Fact.edit_version)
+        .where(Fact.tenant_id == tenant_id, Fact.document_id == document_id)
+    )
+    return {str(row[0]): _FactView(*row) for row in res.all()}
 
 
 def _attestation_holds(att: Optional[Dict[str, Any]], facts: Dict[str, Fact]) -> bool:
@@ -378,7 +399,7 @@ async def get_review_document(db: AsyncSession, tenant_id: UUID, document_id: UU
     doc = await _get_document(db, tenant_id, document_id)
     original, state = await _ensure_review(db, doc)
     orig_blocks, orig_rows, orig_cells = _original_index(original)
-    facts = await _load_facts(db, tenant_id, state.blocks)
+    facts = await _read_facts(db, tenant_id, document_id)
     history = await _history_counts(db, tenant_id, document_id)
     low_conf = await get_float("review_low_confidence_threshold", 0.6)
 
@@ -925,7 +946,7 @@ async def revert_all(
     _require(role, REVERT_ALL_ROLES, "Revert all")
     _, original, state = await _lock_state(db, tenant_id, document_id, expected_version)
     _, _, orig_cells = _original_index(original)
-    facts = await _load_facts(db, tenant_id, state.blocks)
+    facts = await _load_facts(db, tenant_id, document_id, state.blocks)
 
     reverted, skipped = [], []
     for block in state.blocks:

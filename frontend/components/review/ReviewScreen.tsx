@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertCircle, ArrowLeft, Download, FileSearch, Loader2, Pencil, RefreshCw, RotateCcw, X, Eye } from "lucide-react";
+import { AlertCircle, ArrowLeft, FileSearch, Loader2, Pencil, RefreshCw, RotateCcw, X, Eye } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { isAuthenticated } from "@/lib/auth";
 import { ConfirmModal } from "@/components/ui/ConfirmModal";
@@ -113,27 +113,6 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
   const [detail, setDetail] = useState<{ blockId: string; rowId: string } | null>(null);
   const [addAfter, setAddAfter] = useState<{ block: ReviewBlock | null; type: "heading" | "paragraph"; text: string } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [showDownload, setShowDownload] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const download = async (fmt: "xlsx" | "csv" | "json") => {
-    setShowDownload(false);
-    setDownloading(true);
-    try {
-      const { blob, filename } = await api.review.exportFile(documentId, fmt);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (e: any) {
-      setBanner({ kind: "error", message: e?.message || "Download failed" });
-    } finally {
-      setDownloading(false);
-    }
-  };
   // Height of the scrolling block list, so a table's own scroll box can be
   // sized to fit inside it and keep its horizontal scrollbar on screen.
   const [listH, setListH] = useState(0);
@@ -349,23 +328,6 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
               {editMode ? <Pencil className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               {editMode ? "Done editing" : "Start editing"}
             </button>
-          )}
-          {doc && !focusMode && (
-            <div className="relative">
-              <button type="button" aria-expanded={showDownload} onClick={() => setShowDownload((v) => !v)} disabled={downloading}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-[#c4c7c5] text-[#1f1f1f] bg-white hover:bg-[#f0f4f9] disabled:opacity-40">
-                {downloading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />} Download
-              </button>
-              {showDownload && (
-                <div role="menu" className="absolute right-0 mt-1 w-64 rounded-xl border border-[#e1e3e1] bg-white shadow-lg p-1 z-30">
-                  <p className="px-3 py-1.5 text-[11px] text-[#444746]">The corrected version. Every value shows whether a person checked it.</p>
-                  {([["xlsx", "Excel (.xlsx)"], ["csv", "CSV (.csv)"], ["json", "JSON (for other systems)"]] as const).map(([fmt, label]) => (
-                    <button key={fmt} type="button" role="menuitem" onClick={() => download(fmt)}
-                      className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-[#f0f4f9]">{label}</button>
-                  ))}
-                </div>
-              )}
-            </div>
           )}
           {doc?.permissions.can_revert_all && !focusMode && (
             <button type="button" disabled={busy || doc.is_clean} onClick={() => setConfirmRevertAll(true)}

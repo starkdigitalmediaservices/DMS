@@ -15,6 +15,8 @@ from ...schemas.auth import TokenPayload
 from ...services import review_service as rs
 
 router = APIRouter(prefix="/documents/{document_id}/review", tags=["Review"])
+# Workbench "Documents" tab: every document with something to review.
+list_router = APIRouter(prefix="/review", tags=["Review"])
 
 _read = require_role(*rs.READ_ROLES)
 _edit = require_role(*rs.EDIT_ROLES)
@@ -175,3 +177,10 @@ async def verify(document_id: uuid.UUID, body: VerifyRequest, response: Response
         db, tenant_id, document_id, actor, role, _if_match(if_match),
         body.block_id, body.row_id, body.verified, body.fact_versions,
     ))
+
+
+@list_router.get("/documents")
+async def list_review_documents(q: Optional[str] = None, limit: int = 50, offset: int = 0,
+                                user: TokenPayload = Depends(_read), db: AsyncSession = Depends(get_tenant_db)):
+    tenant_id, _, _ = _ctx(user)
+    return await rs.list_review_documents(db, tenant_id, q=q, limit=limit, offset=offset)

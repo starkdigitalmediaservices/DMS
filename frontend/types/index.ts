@@ -389,3 +389,16 @@ export interface ReviewHistoryEntry {
   created_at: string;
   entry_hash: string;
 }
+
+export interface ReviewDocumentSummary {
+  document_id: string;
+  title: string;
+  page_count: number;
+  fact_count: number;
+  in_review_count: number;
+  verified_count: number;
+  verified_pct: number;
+  review_started: boolean;
+  last_reviewed_at: string | null;
+  last_reviewed_by: string | null;
+}

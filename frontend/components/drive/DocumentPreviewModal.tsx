@@ -570,7 +570,7 @@ export function DocumentPreviewModal({
 
           {(isPdf || isImage) && (
             <Link
-              href={`/review?doc=${encodeURIComponent(doc.id)}${initialPage ? `&page=${initialPage}` : ""}`}
+              href={`/workbench?doc=${encodeURIComponent(doc.id)}${initialPage ? `&page=${initialPage}` : ""}&from=documents`}
               className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-full text-xs font-semibold border border-white/20 transition-all"
               title="Open the side-by-side review screen: scan on the left, extracted text on the right"
             >

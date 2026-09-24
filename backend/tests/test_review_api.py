@@ -158,3 +158,19 @@ async def test_department_scope_applies_to_review_and_page_image(world):
         assert (await c.get(f"{_base(w, 'doc_B')}/history", params={"block_id": TABLE})).status_code == 404
     async with _client(w, "admin") as c:
         assert (await c.get(_base(w, "doc_B"))).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_documents_list_shows_progress_and_respects_scope(world):
+    w = world
+    async with _client(w, "admin") as c:
+        items = (await c.get("/api/v1/review/documents")).json()["items"]
+        mine = {i["document_id"]: i for i in items if i["document_id"] in (str(w["doc_A"]), str(w["doc_B"]))}
+        assert set(mine) == {str(w["doc_A"]), str(w["doc_B"])}
+        assert mine[str(w["doc_A"])]["fact_count"] == 1 and mine[str(w["doc_A"])]["in_review_count"] == 1
+        assert mine[str(w["doc_A"])]["review_started"] is False
+        only_b = (await c.get("/api/v1/review/documents", params={"q": "doc_B"})).json()["items"]
+        assert [i["document_id"] for i in only_b] == [str(w["doc_B"])]
+    async with _client(w, "op") as c:
+        ids = {i["document_id"] for i in (await c.get("/api/v1/review/documents")).json()["items"]}
+        assert str(w["doc_A"]) in ids and str(w["doc_B"]) not in ids

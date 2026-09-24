@@ -45,6 +45,9 @@ const pct = (b: Omit<ReviewBox, "page">) => ({
 export default function ScanViewer({ documentId, page, pageCount, onPageChange, blocks, selected, hovered, onBoxClick }: Props) {
   const [zoom, setZoom] = useState(1);
   const [src, setSrc] = useState<string | null>(null);
+  // Overlays are positioned in % of the image, so nothing can be scrolled
+  // to until the image has its real height.
+  const [imgLoaded, setImgLoaded] = useState(false);
   const [error, setError] = useState("");
   const cache = useRef(new Map<number, string>());
   const scroller = useRef<HTMLDivElement>(null);
@@ -53,6 +56,7 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
   useEffect(() => {
     let cancelled = false;
     setError("");
+    setImgLoaded(false);
     const cached = cache.current.get(page);
     if (cached) {
       setSrc(cached);
@@ -105,17 +109,19 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
     return union(onPage);
   }, [blocks, selected, hovered, page]);
 
+  // A block box lights up only when the block itself is selected/hovered;
+  // with a row selected, only that row's box does.
   const isActive = (t: FocusTarget, ref: FocusTarget | null) =>
-    !!ref && ref.blockId === t.blockId && (t.rowId === undefined ? true : ref.rowId === t.rowId);
+    !!ref && ref.blockId === t.blockId && (t.rowId === undefined ? ref.rowId === undefined : ref.rowId === t.rowId);
 
   // Scroll the selected box into view when selection comes from the card list.
   useEffect(() => {
-    if (!selected || !scroller.current) return;
+    if (!selected || !scroller.current || !imgLoaded) return;
     const el = scroller.current.querySelector<HTMLElement>(
       selected.rowId ? `[data-overlay="r-${selected.blockId}-${selected.rowId}"]` : `[data-overlay="b-${selected.blockId}"]`
     );
     el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
-  }, [selected, page, src]);
+  }, [selected, page, imgLoaded]);
 
   const setZoomClamped = useCallback((z: number) => setZoom(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100))), []);
 
@@ -194,7 +200,7 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
         {src && (
           <div className="relative mx-auto my-3 shadow-md bg-white" style={{ width: `${zoom * 100}%`, minWidth: zoom < 1 ? undefined : "100%" }}>
             {/* eslint-disable-next-line @next/next/no-img-element -- object URL of an authenticated blob */}
-            <img src={src} alt={`Scanned page ${page}`} draggable={false} className="block w-full h-auto" />
+            <img src={src} alt={`Scanned page ${page}`} draggable={false} className="block w-full h-auto" onLoad={() => setImgLoaded(true)} />
             {overlays.map((o) => {
               const style = BLOCK_TYPE_STYLE[o.block.type];
               const active = isActive(o.target, selected);

@@ -1,6 +1,6 @@
 import { getAccessToken, getUserProfile, setUserProfile, clearTokens } from "./auth";
 import { offlineStore } from "./offlineStore";
-import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, SearchResult, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem, AdminUser, CreatedAdminUser, Department, ReviewDocument, ReviewHistoryEntry } from "@/types";
+import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, SearchResult, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem, AdminUser, CreatedAdminUser, Department, ReviewDocument, ReviewDocumentSummary, ReviewHistoryEntry } from "@/types";
 
 // An HTTP error response from the backend (as opposed to a network-level
 // failure, which is a plain Error). Carries the status so callers can tell
@@ -390,6 +390,12 @@ export const api = {
   // the full updated document back; a stale version is an ApiError with
   // status 409 and detail.code "stale_document" / "stale_fact".
   review: {
+    // Workbench "Documents" tab: documents with something to review, with progress.
+    listDocuments: async (q: string = "", limit: number = 50, offset: number = 0): Promise<{ total: number; items: ReviewDocumentSummary[] }> => {
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (q.trim()) params.set("q", q.trim());
+      return await request(`/api/v1/review/documents?${params.toString()}`, { method: "GET" });
+    },
     get: async (documentId: string): Promise<ReviewDocument> => {
       return await request(`/api/v1/documents/${documentId}/review`, { method: "GET" });
     },

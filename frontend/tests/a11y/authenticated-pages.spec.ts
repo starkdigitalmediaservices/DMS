@@ -7,7 +7,7 @@ import AxeBuilder from "@axe-core/playwright";
 const AUTHENTICATED_PAGES = [
   "/drive",
   "/workbench",
-  "/review",
+  "/workbench?tab=documents",
   "/entities",
   "/completeness",
   "/upload",

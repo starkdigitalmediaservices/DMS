@@ -165,7 +165,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onPreview, reran
 
           {/* Opens the review screen on the page this hit matched. */}
           <Link
-            href={`/review?doc=${encodeURIComponent(result.document_id)}&page=${result.page_number || 1}`}
+            href={`/workbench?doc=${encodeURIComponent(result.document_id)}&page=${result.page_number || 1}&from=documents`}
             className="flex items-center gap-1.5 text-xs font-semibold text-[#0d2e5c] hover:text-[#0945a5] bg-white hover:bg-[#edf2fc] px-3 py-1.5 rounded-lg border border-[#d3d7dc] transition-all"
             title={result.page_number ? `Review — opens on page ${result.page_number}` : "Review"}
           >

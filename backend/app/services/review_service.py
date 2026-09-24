@@ -1128,3 +1128,67 @@ async def get_page_image(db: AsyncSession, tenant_id: UUID, document_id: UUID, p
     except Exception:
         pass  # a failed cache write must never fail the page itself
     return png
+
+
+# --------------------------------------------------------------------------
+# Workbench "Documents" tab
+# --------------------------------------------------------------------------
+
+async def list_review_documents(
+    db: AsyncSession, tenant_id: UUID, q: Optional[str] = None, limit: int = 50, offset: int = 0,
+) -> Dict[str, Any]:
+    """Documents that have something to review, with progress per document.
+
+    Runs on the caller's RLS session, so department scope applies exactly as
+    for the document list. Counts are over real (non "_"-prefixed) facts --
+    the same set the review screen shows. Documents in review come first."""
+    from sqlalchemy import case, func
+
+    from app.models.user import User
+
+    fact_counts = (
+        select(
+            Fact.document_id.label("document_id"),
+            func.count().label("fact_count"),
+            func.count().filter(Fact.status == "in_review").label("in_review"),
+            func.count().filter(Fact.status == "verified").label("verified"),
+        )
+        .where(Fact.tenant_id == tenant_id, ~Fact.field_name.startswith("_", autoescape=True))
+        .group_by(Fact.document_id)
+        .subquery()
+    )
+    stmt = (
+        select(
+            Document.id, Document.title, Document.pages_total_count,
+            fact_counts.c.fact_count, fact_counts.c.in_review, fact_counts.c.verified,
+            ReviewState.version, ReviewState.updated_at, User.full_name, User.email,
+        )
+        .join(fact_counts, fact_counts.c.document_id == Document.id)
+        .outerjoin(ReviewState, ReviewState.document_id == Document.id)
+        .outerjoin(User, User.id == ReviewState.updated_by)
+        .where(Document.tenant_id == tenant_id, Document.is_trashed.is_(False))
+    )
+    if q:
+        stmt = stmt.where(Document.title.ilike(f"%{q}%"))
+    total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+    stmt = stmt.order_by(
+        case((fact_counts.c.in_review > 0, 0), else_=1), fact_counts.c.in_review.desc(), Document.title
+    ).limit(min(max(limit, 1), 200)).offset(max(offset, 0))
+
+    items = []
+    for row in (await db.execute(stmt)).all():
+        (doc_id, title, pages, fact_count, in_review, verified, version, updated_at, name, email) = row
+        items.append({
+            "document_id": str(doc_id),
+            "title": title,
+            "page_count": pages or 0,
+            "fact_count": fact_count,
+            "in_review_count": in_review,
+            "verified_count": verified,
+            "verified_pct": round(100 * verified / fact_count) if fact_count else 0,
+            # version > 1 means at least one review action has been saved
+            "review_started": bool(version and version > 1),
+            "last_reviewed_at": updated_at.isoformat() if version and version > 1 and updated_at else None,
+            "last_reviewed_by": (name or email) if version and version > 1 else None,
+        })
+    return {"total": total, "items": items}

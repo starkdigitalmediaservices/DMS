@@ -1,6 +1,7 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   ShieldCheck,
@@ -31,6 +32,13 @@ import RegionHighlightViewer from "@/components/drive/RegionHighlightViewer";
 import type { FolderTreeNode } from "@/types";
 import { useI18n } from "@/lib/i18n";
 import { useRole } from "@/lib/permissions";
+import WorkbenchTabs from "@/components/workbench/WorkbenchTabs";
+import ReviewDocumentsView from "@/components/workbench/ReviewDocumentsView";
+import ReviewScreen from "@/components/review/ReviewScreen";
+
+function openInDocumentHref(fact: { document_id: string; fact_id: string }): string {
+  return `/workbench?doc=${encodeURIComponent(fact.document_id)}&fact=${encodeURIComponent(fact.fact_id)}&from=queue`;
+}
 
 function flattenFolders(nodes: FolderTreeNode[], depth = 0): { id: string; name: string; depth: number }[] {
   const out: { id: string; name: string; depth: number }[] = [];
@@ -80,8 +88,9 @@ function confidenceBadge(confidence: number | null): { text: string; className: 
   return { text: confidence.toFixed(2), className: "text-red-700 bg-red-50 border-red-200" };
 }
 
-export default function WorkbenchPage() {
+function QueueWorkbench() {
   const { t } = useI18n();
+  const router = useRouter();
   // Everyone can read the queues; only reviewer roles can act on them
   // (claim/release/confirm/bulk-edit/bulk-confirm/mark-handwritten/
   // resolve-stitch, plus corpus calibration) — the rest get a read-only view.
@@ -412,6 +421,8 @@ export default function WorkbenchPage() {
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
+      } else if ((e.key === "o" || e.key === "O") && facts[selectedIndex] && !facts[selectedIndex].field_name.startsWith("_")) {
+        router.push(openInDocumentHref(facts[selectedIndex]));
       } else if (!canReview) {
         // Read-only roles: navigation only, no review shortcuts.
         return;
@@ -470,6 +481,7 @@ export default function WorkbenchPage() {
             <ShieldCheck className="w-5 h-5 text-[#0d2e5c] shrink-0" />
             <span className="truncate">{t("workbench.title", "Verification Workbench")}</span>
           </h1>
+          <WorkbenchTabs active="queue" />
         </div>
         {/* Keyboard shortcuts only mean something to a keyboard/mouse user —
             hidden below lg, the same breakpoint the layout stacks at for
@@ -477,7 +489,7 @@ export default function WorkbenchPage() {
             space and pushed the header into two lines. */}
         <div className="hidden lg:flex items-center gap-1.5 text-xs text-[#5f6368] shrink-0">
           <Keyboard className="w-4 h-4" />
-          <span>{canReview ? <>&uarr;/&darr; navigate &middot; C claim &middot; R release &middot; Enter/A confirm &middot; H mark handwritten</> : <>&uarr;/&darr; navigate</>}</span>
+          <span>{canReview ? <>&uarr;/&darr; navigate &middot; O open in document &middot; C claim &middot; R release &middot; Enter/A confirm &middot; H mark handwritten</> : <>&uarr;/&darr; navigate &middot; O open in document</>}</span>
         </div>
       </header>
 
@@ -671,6 +683,19 @@ export default function WorkbenchPage() {
                     minimum a finger needs) without shrinking them back down
                     on the mouse-driven two-column desktop layout. */}
                 <div className="flex flex-wrap gap-2 pt-2">
+                  {/* Table values open in the full document review, on this
+                      cell; marginalia / join-mismatch / stitch items are not
+                      table cells there, so they keep the region popup only. */}
+                  {!selected.field_name.startsWith("_") && (
+                    <Link
+                      href={openInDocumentHref(selected)}
+                      className="inline-flex items-center rounded-lg bg-[#0d2e5c] px-3 h-8 max-lg:h-11 max-lg:px-4 text-xs font-semibold text-white hover:bg-[#0945a5]"
+                      title="Open the whole document with its scan, on this value (shortcut: O)"
+                    >
+                      <FileText className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
+                      Open in document
+                    </Link>
+                  )}
                   <Button size="sm" className="max-lg:h-11 max-lg:px-4" variant="secondary" onClick={() => setViewingSourceFactId(selected.fact_id)} title="See exactly where this value was read from on the original page">
                     <Eye className="w-3.5 h-3.5 mr-1.5" />
                     {t("workbench.btn.view_source", "View Source")}
@@ -948,5 +973,39 @@ export default function WorkbenchPage() {
         </div>
       )}
     </div>
+  );
+}
+
+
+/** /workbench        -> the queue (triage values across documents)
+ *  ?tab=documents    -> documents to review, with progress
+ *  ?doc=<id>         -> one document in the review view; &page=N lands on a
+ *                       page (search hits), &fact=<id> on a queue item's cell */
+function WorkbenchRouter() {
+  const params = useSearchParams();
+  const doc = params.get("doc");
+  if (doc) {
+    const fromQueue = params.get("from") === "queue";
+    return (
+      <ReviewScreen
+        key={doc}
+        documentId={doc}
+        initialPage={Math.max(1, parseInt(params.get("page") || "1", 10) || 1)}
+        focusFactId={params.get("fact")}
+        backHref={fromQueue ? "/workbench" : "/workbench?tab=documents"}
+        backLabel={fromQueue ? "Back to queue" : "Back to documents"}
+      />
+    );
+  }
+  if (params.get("tab") === "documents") return <ReviewDocumentsView />;
+  return <QueueWorkbench />;
+}
+
+export default function WorkbenchPage() {
+  // useSearchParams needs a Suspense boundary under static export.
+  return (
+    <Suspense fallback={<div className="p-8 text-sm text-[#5f6368]">Loading…</div>}>
+      <WorkbenchRouter />
+    </Suspense>
   );
 }

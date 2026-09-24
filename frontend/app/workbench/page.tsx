@@ -544,16 +544,21 @@ function WorkbenchRouter() {
   const params = useSearchParams();
   const doc = params.get("doc");
   if (doc) {
-    const fromQueue = params.get("from") === "queue";
+    const from = params.get("from");
+    const entity = params.get("entity");
+    const fromQueue = from === "queue";
+    const fromEntity = from === "entity" && !!entity;
     return (
       <ReviewScreen
         key={doc}
         documentId={doc}
         initialPage={Math.max(1, parseInt(params.get("page") || "1", 10) || 1)}
         focusFactId={params.get("fact")}
-        showQueueItem={fromQueue && !!params.get("fact")}
-        backHref={fromQueue ? "/workbench" : "/workbench?tab=documents"}
-        backLabel={fromQueue ? "Back to the list" : "Back to documents"}
+        // Arriving to check one value (from the list, or from Entity 360's
+        // "Show on page") opens the focused single-item view.
+        showQueueItem={(fromQueue || fromEntity) && !!params.get("fact")}
+        backHref={fromEntity ? `/entities?node=${encodeURIComponent(entity!)}` : fromQueue ? "/workbench" : "/workbench?tab=documents"}
+        backLabel={fromEntity ? "Back to the entity" : fromQueue ? "Back to the list" : "Back to documents"}
       />
     );
   }

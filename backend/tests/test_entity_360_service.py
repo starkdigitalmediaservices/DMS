@@ -80,3 +80,73 @@ async def test_entity_360_never_returns_another_tenants_fact_content():
         finally:
             await db.rollback()
             await db.close()
+
+
+@pytest.mark.asyncio
+async def test_relationship_evidence_is_shown_and_appears_in_lists_every_document():
+    """Found live 2026-09-24: 60% of entities showed "Linked facts (0)"
+    although their relationships carried the document value they were read
+    from. The view now surfaces that evidence (with page), and "appears_in"
+    lists each document mentioning the entity -- linked, or a value reading
+    exactly as its name."""
+    from app.models.fact_region import FactRegion
+    from app.models.page import DocumentPage
+
+    async with AsyncSessionLocal() as db:
+        try:
+            tenant_id = uuid.uuid4()
+            db.add(Tenant(id=tenant_id, name=f"E360b {uuid.uuid4().hex[:6]}"))
+            await db.flush()
+            docs = []
+            for title in ("register-a.pdf", "register-b.pdf"):
+                doc = Document(id=uuid.uuid4(), tenant_id=tenant_id, title=title, status="indexed")
+                version = DocumentVersion(id=uuid.uuid4(), tenant_id=tenant_id, document_id=doc.id, version_number=1,
+                                          s3_path="x", file_hash=uuid.uuid4().hex, file_size_bytes=1, original_filename=title)
+                db.add_all([doc, version])
+                await db.flush()
+                doc.current_version_id = version.id
+                page = DocumentPage(id=uuid.uuid4(), tenant_id=tenant_id, document_id=doc.id, version_id=version.id,
+                                    page_number=3, width=600, height=800)
+                db.add(page)
+                await db.flush()
+                docs.append((doc, version, page))
+
+            def fact_on(i, name, value):
+                doc, version, page = docs[i]
+                f = Fact(id=uuid.uuid4(), tenant_id=tenant_id, document_id=doc.id, version_id=version.id,
+                         field_name=name, value={"v": value}, confidence=0.9, status="machine")
+                return f, FactRegion(id=uuid.uuid4(), tenant_id=tenant_id, fact_id=f.id, page_id=page.id,
+                                     x0=0.1, y0=0.1, x1=0.3, y1=0.15)
+
+            evidence, r1 = fact_on(0, "wakf_name", "Dargah Hazrat Shah Wali")
+            same_name, r2 = fact_on(1, "wakf_name", "  dargah hazrat shah wali ")  # never linked
+            unrelated, r3 = fact_on(1, "wakf_name", "Idgah Maidan")
+            db.add_all([evidence, same_name, unrelated])
+            await db.flush()
+            db.add_all([r1, r2, r3])
+            prop = EntityNode(id=uuid.uuid4(), tenant_id=tenant_id, entity_type="property", label="Dargah Hazrat Shah Wali", attributes={})
+            person = EntityNode(id=uuid.uuid4(), tenant_id=tenant_id, entity_type="person", label="Yusuf Ali Khan", attributes={})
+            db.add_all([prop, person])
+            await db.flush()
+            db.add(EntityEdge(id=uuid.uuid4(), tenant_id=tenant_id, edge_type="manages", tier=2, source_node_id=person.id,
+                              target_type="entity", target_node_id=prop.id, status="machine",
+                              created_by_policy_version="test", evidence_fact_id=evidence.id))
+            await db.flush()
+
+            view = await get_entity_360_view(db, tenant_id, prop.id)
+
+            link = view["linked_entities"][0]
+            assert link["evidence"]["fact_id"] == str(evidence.id)
+            assert link["evidence"]["document_title"] == "register-a.pdf" and link["evidence"]["page_numbers"] == [3]
+
+            assert [lf["fact"]["fact_id"] for lf in view["linked_facts"]] == [str(evidence.id)]
+            assert view["linked_facts"][0]["via"] == {"edge_type": "manages", "other_label": "Yusuf Ali Khan"}
+
+            appears = {a["document_title"]: a for a in view["appears_in"]}
+            assert set(appears) == {"register-a.pdf", "register-b.pdf"}
+            assert appears["register-a.pdf"]["linked"] is True and appears["register-a.pdf"]["pages"] == [3]
+            assert appears["register-b.pdf"]["linked"] is False
+            assert [m["fact_id"] for m in appears["register-b.pdf"]["mentions"]] == [str(same_name.id)]  # not "Idgah Maidan"
+            assert view["appears_in"][0]["document_title"] == "register-a.pdf"  # linked documents first
+        finally:
+            await db.rollback()

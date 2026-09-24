@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/Button";
 import RegionHighlightViewer from "@/components/drive/RegionHighlightViewer";
 import { useI18n } from "@/lib/i18n";
 import { useRole } from "@/lib/permissions";
+import { humanFieldName } from "@/lib/fieldLabels";
 
 interface FieldProvenance {
   kind: "base" | "amendment";
@@ -45,6 +46,36 @@ interface LinkedEntity {
   confidence: number | null;
   direction: "outgoing" | "incoming";
   other_node: { id: string; entity_type: string; label: string };
+  /** The document value this link was read from. */
+  evidence: FactRef | null;
+}
+
+interface FactRef {
+  fact_id: string;
+  field_name: string;
+  value: any;
+  document_id: string;
+  document_title: string | null;
+  page_numbers: number[];
+}
+
+interface AppearsIn {
+  document_id: string;
+  document_title: string | null;
+  pages: number[];
+  linked: boolean;
+  mentions: { fact_id: string; field_name: string; value: any; page_numbers: number[]; how: "linked" | "same_name" }[];
+}
+
+/** Opens the Workbench document view on exactly this value's spot on the
+ *  scan, with a way back to this entity. */
+function showOnPageHref(fact: { document_id: string; fact_id: string }, nodeId: string): string {
+  return `/workbench?doc=${encodeURIComponent(fact.document_id)}&fact=${encodeURIComponent(fact.fact_id)}&from=entity&entity=${encodeURIComponent(nodeId)}`;
+}
+
+function pagesText(pages: number[]): string {
+  if (!pages.length) return "";
+  return pages.length === 1 ? `p. ${pages[0]}` : `pp. ${pages.slice(0, 8).join(", ")}${pages.length > 8 ? "…" : ""}`;
 }
 
 interface LinkedFact {
@@ -53,7 +84,10 @@ interface LinkedFact {
   tier: number;
   status: string;
   confidence: number | null;
-  fact: { fact_id: string; field_name: string; value: any; document_id: string; document_title: string | null };
+  direction: "outgoing" | "incoming";
+  /** Set when this value is the evidence behind a relationship. */
+  via: { edge_type: string; other_label: string } | null;
+  fact: FactRef;
 }
 
 interface Entity360 {
@@ -61,6 +95,7 @@ interface Entity360 {
   records: RecordView[];
   linked_entities: LinkedEntity[];
   linked_facts: LinkedFact[];
+  appears_in: AppearsIn[];
 }
 
 interface RecordHistory {
@@ -77,6 +112,8 @@ interface RecordHistory {
 
 function formatValue(v: any): string {
   if (v === null || v === undefined) return "—";
+  // Extracted values are stored as {"v": ...}; show the value, not the wrapper.
+  if (typeof v === "object" && !Array.isArray(v) && "v" in v) return formatValue(v.v);
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
 }
@@ -203,6 +240,14 @@ export default function Entity360Page() {
       setLoading(false);
     }
   };
+
+  // /entities?node=<id> opens that entity directly -- the Workbench's
+  // "Back to entity" link from a "Show on page" lands here.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("node");
+    if (id) load(id, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const goBack = () => {
     const prev = navHistory[navHistory.length - 1];
@@ -420,8 +465,19 @@ export default function Entity360Page() {
                         <TierBadge tier={e.tier} />
                         {e.confidence != null ? ` · ${Math.round(e.confidence * 100)}%` : ""}
                       </span>
+                      {e.evidence && (
+                        <span className="block mt-0.5 text-[11px] text-[#444746]">
+                          Found in {e.evidence.document_title || "a document"}{e.evidence.page_numbers.length ? `, ${pagesText(e.evidence.page_numbers)}` : ""}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
+                      {e.evidence && (
+                        <Link href={showOnPageHref(e.evidence, data.node.id)} className="flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline"
+                          title="Open the scanned page where this link was read, with the value outlined">
+                          <FileText className="w-3 h-3" /> Show on page
+                        </Link>
+                      )}
                       <EdgeStatusBadge status={e.status} />
                       {canEditGraph && e.status === "held" && (
                         <button
@@ -456,19 +512,17 @@ export default function Entity360Page() {
 
             <Card className="bg-white border border-[#e1e3e1]">
               <h3 className="text-sm font-bold mb-1">Linked facts ({data.linked_facts.length})</h3>
-              <p className="text-[10px] text-[#444746] mb-3">Extracted document fields tied to this entity.</p>
+              <p className="text-[10px] text-[#444746] mb-3">Values read from documents that are tied to this entity, including the evidence behind each link above.</p>
               {data.linked_facts.length === 0 && <p className="text-sm text-[#747775]">No linked facts.</p>}
               <div className="flex flex-col gap-2">
                 {data.linked_facts.map((e) => (
-                  <div key={e.edge_id} className="flex items-center justify-between border border-[#e1e3e1] rounded-lg px-3 py-2 text-xs gap-2">
+                  <div key={`${e.edge_id}-${e.fact.fact_id}`} className="flex items-center justify-between border border-[#e1e3e1] rounded-lg px-3 py-2 text-xs gap-2">
                     <div className="min-w-0">
-                      <span className="font-bold">{humanize(e.edge_type)}</span>
-                      <span className="ml-2 text-[#747775]">
-                        {e.fact.field_name} = {formatValue(e.fact.value)} ({e.fact.document_title || "unknown source"})
-                      </span>
-                      <span className="ml-2">
-                        <TierBadge tier={e.tier} />
-                        {e.confidence != null ? ` · ${Math.round(e.confidence * 100)}%` : ""}
+                      <span className="font-bold">{humanFieldName(e.fact.field_name)}:</span>
+                      <span className="ml-1.5">{formatValue(e.fact.value)}</span>
+                      <span className="block mt-0.5 text-[11px] text-[#444746]">
+                        {e.fact.document_title || "unknown source"}{e.fact.page_numbers.length ? `, ${pagesText(e.fact.page_numbers)}` : ""}
+                        {e.via ? ` · evidence for: ${humanize(e.via.edge_type)} ${e.direction === "outgoing" ? "→" : "←"} ${e.via.other_label}` : ` · ${humanize(e.edge_type)}`}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -495,14 +549,57 @@ export default function Entity360Page() {
                           Revert
                         </button>
                       )}
-                      <button
-                        onClick={() => setViewingFactId(e.fact.fact_id)}
-                        className="flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline"
-                      >
-                        <FileText className="w-3 h-3" /> source
-                      </button>
+                      <Link href={showOnPageHref(e.fact, data.node.id)} className="flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline"
+                        title="Open the scanned page with this value outlined">
+                        <FileText className="w-3 h-3" /> Show on page
+                      </Link>
                     </div>
                   </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card className="bg-white border border-[#e1e3e1]">
+              <h3 className="text-sm font-bold mb-1">Appears in ({data.appears_in.length} {data.appears_in.length === 1 ? "document" : "documents"})</h3>
+              <p className="text-[10px] text-[#444746] mb-3">
+                Every document that mentions this entity: through the links above, or where a value reads exactly as its name.
+              </p>
+              {data.appears_in.length === 0 && <p className="text-sm text-[#747775]">Not found in any document you can open.</p>}
+              <div className="flex flex-col gap-2">
+                {data.appears_in.map((a) => (
+                  <details key={a.document_id} className="border border-[#e1e3e1] rounded-lg px-3 py-2 text-xs group">
+                    <summary className="flex items-center justify-between gap-2 cursor-pointer list-none">
+                      <span className="min-w-0">
+                        <span className="font-bold">{a.document_title || "Untitled document"}</span>
+                        <span className="ml-2 text-[#444746]">
+                          {a.mentions.length} {a.mentions.length === 1 ? "mention" : "mentions"}{a.pages.length ? ` · ${pagesText(a.pages)}` : ""}
+                        </span>
+                        {!a.linked && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-900 text-[10px] font-semibold"
+                            title="Not linked to this entity yet -- a value in this document reads exactly as its name">
+                            same name only
+                          </span>
+                        )}
+                      </span>
+                      <Link href={showOnPageHref({ document_id: a.document_id, fact_id: a.mentions[0].fact_id }, data.node.id)}
+                        onClick={(ev) => ev.stopPropagation()}
+                        className="shrink-0 flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline">
+                        <FileText className="w-3 h-3" /> Show on page
+                      </Link>
+                    </summary>
+                    <ul className="mt-2 flex flex-col gap-1 border-t border-[#f0f0f0] pt-2">
+                      {a.mentions.map((m) => (
+                        <li key={m.fact_id} className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate">
+                            <span className="text-[#444746]">{pagesText(m.page_numbers) || "page unknown"} · {humanFieldName(m.field_name)}:</span>{" "}
+                            {formatValue(m.value)}
+                          </span>
+                          <Link href={showOnPageHref({ document_id: a.document_id, fact_id: m.fact_id }, data.node.id)}
+                            className="shrink-0 font-semibold text-[#0d2e5c] hover:underline">Show</Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
                 ))}
               </div>
             </Card>

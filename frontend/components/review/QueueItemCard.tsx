@@ -36,6 +36,7 @@ interface Props {
   onSaveCell?: (value: string) => Promise<boolean>;
   onUndoCell?: () => void;
   backHref: string;
+  backLabel?: string;
 }
 
 function display(value: any): string {
@@ -47,7 +48,7 @@ function display(value: any): string {
 /** The queue item a reviewer arrived with, pinned above the document's
  *  blocks: what it is, where it came from, and the same actions the queue's
  *  panel offers -- so nothing needs the old "View Source" popup. */
-export default function QueueItemCard({ factId, docVersion, canReview, onRegions, onChanged, cell, onSaveCell, onUndoCell, backHref }: Props) {
+export default function QueueItemCard({ factId, docVersion, canReview, onRegions, onChanged, cell, onSaveCell, onUndoCell, backHref, backLabel }: Props) {
   const { t } = useI18n();
   const [fact, setFact] = useState<FactDetail | null>(null);
   const [error, setError] = useState("");
@@ -194,7 +195,7 @@ export default function QueueItemCard({ factId, docVersion, canReview, onRegions
 
       {done && (
         <Link href={backHref} className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#0d2e5c] bg-white text-[#0d2e5c] text-xs font-semibold hover:bg-[#f0f4f9]">
-          <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" /> Back to the list for the next item
+          <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" /> {backLabel === "Back to the list" || !backLabel ? "Back to the list for the next item" : backLabel}
         </Link>
       )}
 

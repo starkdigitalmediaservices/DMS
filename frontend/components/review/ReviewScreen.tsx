@@ -381,7 +381,7 @@ export default function ReviewScreen({ documentId, initialPage = 1, focusFactId,
               <div className="mb-2">
                 <QueueItemCard
                   factId={focusFactId} docVersion={doc?.version} canReview={roleCan("facts.review")}
-                  onRegions={setFocusBoxes} onChanged={load} backHref={backHref}
+                  onRegions={setFocusBoxes} onChanged={load} backHref={backHref} backLabel={backLabel}
                   cell={focusCellLive ? { text: focusCellLive.cell.text, original: focusCellLive.cell.original, edited: focusCellLive.cell.edited, revertable: focusCellLive.cell.revertable } : null}
                   onSaveCell={focusCellLive ? (v) => actions.editCell(focusCellLive.block, focusCellLive.row, focusCellLive.col, v) : undefined}
                   onUndoCell={focusCellLive ? () => actions.revert({ block_id: focusCellLive.block.id, row_id: focusCellLive.row.id, col: focusCellLive.col }) : undefined}

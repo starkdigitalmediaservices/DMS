@@ -15,6 +15,7 @@
     "lint": "next lint",
     "test:a11y": "playwright test",
     "test:a11y:fast": "node scripts/run_a11y_audit.mjs",
+    "test:e2e": "playwright test -c playwright.e2e.config.ts",
     "desktop:dev": "electron .",
     "desktop:build": "BUILD_TARGET=desktop next build && electron-builder --linux AppImage deb",
     "tauri": "tauri",

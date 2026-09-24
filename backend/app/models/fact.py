@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy import ForeignKey, Float, Text, Boolean, CheckConstraint
+from sqlalchemy import ForeignKey, Float, Text, Boolean, CheckConstraint, Integer
 from datetime import datetime
 import uuid
 from typing import TYPE_CHECKING, Any, List, Optional
@@ -53,6 +53,12 @@ class Fact(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, default="machine")
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
+    # Review screen (migration 0055) -- bumped by bump_edit_version() on
+    # every change to value or review status, never on claim/release. The
+    # Workbench and the review screen both send the version they loaded;
+    # a mismatch is a 409 instead of a silent overwrite.
+    edit_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+
     # T30/T55 — nothing sets this True yet (the handwritten/degraded
     # capture policy, T30, isn't built), but bulk_confirm_facts (T54)
     # already refuses to auto-promote a handwritten fact once something
@@ -78,3 +84,24 @@ class Fact(Base):
     regions: Mapped[List["FactRegion"]] = relationship(
         "FactRegion", back_populates="fact", cascade="all, delete-orphan"
     )
+
+
+def bump_edit_version(fact: "Fact") -> None:
+    fact.edit_version = (fact.edit_version or 1) + 1
+
+
+def check_edit_version(fact: "Fact", expected: Optional[int]) -> None:
+    """409 when a caller's view of this fact is stale. `expected=None`
+    skips the check (older API clients that do not send a version)."""
+    if expected is not None and expected != fact.edit_version:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "stale_fact",
+                "message": "This value was changed by someone else since you loaded it. Reload to see the latest.",
+                "fact_id": str(fact.id),
+                "expected_version": expected,
+                "current_version": fact.edit_version,
+            },
+        )

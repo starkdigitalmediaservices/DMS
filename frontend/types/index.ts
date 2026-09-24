@@ -113,6 +113,9 @@ export interface DocumentFact {
   confidence: number | null;
   status: "machine" | "in_review" | "verified";
   is_handwritten: boolean;
+  // Bumped on every value/status change; sent back on edit/confirm so a
+  // stale write is a 409 instead of a silent overwrite.
+  edit_version?: number;
   page_numbers: number[];
   // True when this field's regions land on more than one physical page —
   // the only reliable, verifiable signal that TS1 (vertical stitching)
@@ -282,4 +285,107 @@ export interface Department {
   created_at: string;
   members: DepartmentMember[];
   folders: DepartmentFolderGrant[];
+}
+
+// ---- Review screen (GET/PATCH /documents/{id}/review) ----
+
+export type ReviewStatus = "MACHINE_EXTRACTED" | "EDITED" | "VERIFIED";
+export type ReviewBlockType = "heading" | "paragraph" | "table" | "image";
+
+/** Normalised 0-1 box, top-left origin. `page` is 1-indexed. */
+export interface ReviewBox {
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface ReviewCell {
+  fact_id: string | null;
+  field_name?: string;
+  text: string;
+  original: string;
+  edited: boolean;
+  status: ReviewStatus;
+  fact_status?: "machine" | "in_review" | "verified";
+  fact_version?: number;
+  revertable: boolean;
+  changed_elsewhere?: boolean;
+  confidence: number | null;
+  low_confidence: boolean;
+  bbox: ReviewBox | null;
+  regions: ReviewBox[];
+  history_count: number;
+  missing?: boolean;
+}
+
+export interface ReviewRow {
+  id: string;
+  index: number;
+  page: number | null;
+  added: boolean;
+  deleted: boolean;
+  flags: string[];
+  status: ReviewStatus;
+  verified_by: string | null;
+  verified_at: string | null;
+  cells: ReviewCell[];
+  history_count: number;
+}
+
+export interface ReviewBlock {
+  id: string;
+  type: ReviewBlockType;
+  order: number;
+  title: string | null;
+  added: boolean;
+  deleted: boolean;
+  source_pages: number[];
+  /** keyed by page number as a string; only pages the block covers */
+  bbox: Record<string, Omit<ReviewBox, "page"> | null>;
+  confidence: number | null;
+  flags: string[];
+  status: ReviewStatus;
+  history_count: number;
+  headers?: string[];
+  rows?: ReviewRow[];
+  text?: string;
+  original?: string;
+  edited?: boolean;
+  revertable?: boolean;
+  verified_by?: string | null;
+  verified_at?: string | null;
+}
+
+export interface ReviewDocument {
+  document_id: string;
+  title: string;
+  mime_type: string | null;
+  page_count: number;
+  builder: string;
+  version: number;
+  etag: string;
+  edit_count: number;
+  is_clean: boolean;
+  low_confidence_threshold: number;
+  blocks: ReviewBlock[];
+  permissions: { can_edit: boolean; can_verify: boolean; can_revert_all: boolean };
+  revert_all?: { reverted: number; skipped: { fact_id: string; reason: string }[] };
+}
+
+export interface ReviewHistoryEntry {
+  id: string;
+  action: string;
+  block_id: string | null;
+  row_id: string | null;
+  row: number | null;
+  col: number | null;
+  fact_id: string | null;
+  old_value: unknown;
+  new_value: unknown;
+  user_id: string;
+  user_name: string | null;
+  created_at: string;
+  entry_hash: string;
 }

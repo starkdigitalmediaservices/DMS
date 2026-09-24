@@ -51,6 +51,7 @@ interface QueueFact {
   confidence: number | null;
   is_handwritten: boolean;
   claimed_by_actor_id: string | null;
+  edit_version?: number;
 }
 
 type Category = "low_confidence" | "handwritten" | "marginalia" | "join_mismatch" | "stitch_ambiguous";
@@ -243,7 +244,12 @@ export default function WorkbenchPage() {
     setEditResult(null);
   };
 
-  const buildEdits = () => Array.from(selectedFactIds).map((fact_id) => ({ fact_id, new_value: { v: editValue } }));
+  const buildEdits = () => Array.from(selectedFactIds).map((fact_id) => ({
+    fact_id,
+    new_value: { v: editValue },
+    // A value someone changed since this queue loaded is refused (409), not overwritten.
+    expected_version: facts.find((f) => f.fact_id === fact_id)?.edit_version,
+  }));
 
   const previewBulkEdit = async () => {
     if (selectedFactIds.size === 0 || !editValue.trim()) return;
@@ -354,7 +360,7 @@ export default function WorkbenchPage() {
       if (action === "claim") await api.facts.claim(selected.fact_id);
       if (action === "release") await api.facts.release(selected.fact_id);
       if (action === "confirm") {
-        await api.facts.confirm(selected.fact_id);
+        await api.facts.confirm(selected.fact_id, selected.edit_version);
         setNotice(`Confirmed "${selected.field_name}" — removed from queue.`);
       }
       if (action === "mark_handwritten") {

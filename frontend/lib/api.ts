@@ -1,6 +1,6 @@
 import { getAccessToken, getUserProfile, setUserProfile, clearTokens } from "./auth";
 import { offlineStore } from "./offlineStore";
-import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, SearchResult, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem, AdminUser, CreatedAdminUser, Department } from "@/types";
+import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, SearchResult, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem, AdminUser, CreatedAdminUser, Department, ReviewDocument, ReviewHistoryEntry } from "@/types";
 
 // An HTTP error response from the backend (as opposed to a network-level
 // failure, which is a plain Error). Carries the status so callers can tell
@@ -9,10 +9,14 @@ import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, 
 // outside the user's department silently rendered cached/stub data.
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  // The server's structured `detail` when it sent one (e.g. a 409's
+  // {code: "stale_document", message, ...}), for callers that act on it.
+  detail?: any;
+  constructor(message: string, status: number, detail?: any) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -197,9 +201,11 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
 
   if (!response.ok) {
     let errorDetail = "Request failed";
+    let structuredDetail: any = undefined;
     try {
       const errJson = await response.json();
       const { detail } = errJson;
+      structuredDetail = detail;
       if (typeof detail === "string" && detail) {
         errorDetail = detail;
       } else if (Array.isArray(detail) && detail.length > 0) {
@@ -223,7 +229,7 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
         errorDetail = await response.text();
       } catch (__) {}
     }
-    throw new ApiError(errorDetail, response.status);
+    throw new ApiError(errorDetail, response.status, structuredDetail);
   }
   
   if (response.status === 204) {
@@ -336,8 +342,11 @@ export const api = {
     release: async (factId: string): Promise<any> => {
       return await request(`/api/v1/facts/${factId}/release`, { method: "POST" });
     },
-    confirm: async (factId: string): Promise<any> => {
-      return await request(`/api/v1/facts/${factId}/confirm`, { method: "POST" });
+    // expectedVersion = the fact's edit_version as loaded; the server 409s
+    // if it changed since (shared with the review screen).
+    confirm: async (factId: string, expectedVersion?: number): Promise<any> => {
+      const qs = expectedVersion !== undefined ? `?expected_version=${expectedVersion}` : "";
+      return await request(`/api/v1/facts/${factId}/confirm${qs}`, { method: "POST" });
     },
     // T30 — operator capture: flag a fact as handwritten even though
     // extraction didn't catch it. Demotes 'machine' to 'in_review' so it
@@ -356,7 +365,7 @@ export const api = {
     // T80 — correct many facts' values in one action. dryRun=true is the
     // "preview before applying" step, same validation path as applying.
     // Never promotes to verified — always demotes to in_review.
-    bulkEdit: async (edits: { fact_id: string; new_value: any }[], dryRun: boolean = false): Promise<any> => {
+    bulkEdit: async (edits: { fact_id: string; new_value: any; expected_version?: number }[], dryRun: boolean = false): Promise<any> => {
       return await request(`/api/v1/facts/bulk-edit`, {
         method: "POST",
         body: JSON.stringify({ edits, dry_run: dryRun }),
@@ -374,6 +383,77 @@ export const api = {
       return await request(`/api/v1/facts/${factId}/resolve-stitch-ambiguity`, {
         method: "POST",
         body: JSON.stringify({ relation }),
+      });
+    },
+  },
+  // Review screen. Every write sends If-Match: <review version> and gets
+  // the full updated document back; a stale version is an ApiError with
+  // status 409 and detail.code "stale_document" / "stale_fact".
+  review: {
+    get: async (documentId: string): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review`, { method: "GET" });
+    },
+    // The page PNG needs the bearer token, so it is fetched as a blob and
+    // shown through an object URL rather than a plain <img src>.
+    pageImage: async (documentId: string, page: number): Promise<Blob> => {
+      const token = getAccessToken();
+      const res = await fetch(`${getBaseUrl()}/api/v1/documents/${documentId}/review/pages/${page}/image`, {
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "ngrok-skip-browser-warning": "true" },
+      });
+      if (!res.ok) throw new ApiError(`Page ${page} image unavailable (${res.status})`, res.status);
+      return await res.blob();
+    },
+    history: async (documentId: string, blockId: string, rowId?: string, col?: number): Promise<{ entries: ReviewHistoryEntry[] }> => {
+      const params = new URLSearchParams({ block_id: blockId });
+      if (rowId) params.set("row_id", rowId);
+      if (col !== undefined) params.set("col", String(col));
+      return await request(`/api/v1/documents/${documentId}/review/history?${params.toString()}`, { method: "GET" });
+    },
+    editCell: async (documentId: string, version: number, blockId: string, rowId: string, col: number, value: string, factVersion?: number): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review/blocks/${encodeURIComponent(blockId)}/rows/${encodeURIComponent(rowId)}/cells/${col}`, {
+        method: "PATCH", headers: { "If-Match": `"${version}"` },
+        body: JSON.stringify({ value, fact_version: factVersion }),
+      });
+    },
+    editText: async (documentId: string, version: number, blockId: string, text: string): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review/blocks/${encodeURIComponent(blockId)}`, {
+        method: "PATCH", headers: { "If-Match": `"${version}"` }, body: JSON.stringify({ text }),
+      });
+    },
+    revert: async (documentId: string, version: number, target: { block_id: string; row_id?: string; col?: number }): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review/revert`, {
+        method: "POST", headers: { "If-Match": `"${version}"` }, body: JSON.stringify(target),
+      });
+    },
+    addRow: async (documentId: string, version: number, blockId: string, afterRowId: string | null): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review/blocks/${encodeURIComponent(blockId)}/rows`, {
+        method: "POST", headers: { "If-Match": `"${version}"` }, body: JSON.stringify({ after_row_id: afterRowId }),
+      });
+    },
+    deleteRow: async (documentId: string, version: number, blockId: string, rowId: string): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review/blocks/${encodeURIComponent(blockId)}/rows/${encodeURIComponent(rowId)}`, {
+        method: "DELETE", headers: { "If-Match": `"${version}"` },
+      });
+    },
+    addBlock: async (documentId: string, version: number, type: "heading" | "paragraph", text: string, afterBlockId: string | null, page: number | null): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review/blocks`, {
+        method: "POST", headers: { "If-Match": `"${version}"` },
+        body: JSON.stringify({ type, text, after_block_id: afterBlockId, page }),
+      });
+    },
+    deleteBlock: async (documentId: string, version: number, blockId: string): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review/blocks/${encodeURIComponent(blockId)}`, {
+        method: "DELETE", headers: { "If-Match": `"${version}"` },
+      });
+    },
+    revertAll: async (documentId: string, version: number): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review/revert-all`, {
+        method: "POST", headers: { "If-Match": `"${version}"` },
+      });
+    },
+    verify: async (documentId: string, version: number, body: { block_id: string; row_id?: string; verified: boolean; fact_versions?: Record<string, number> }): Promise<ReviewDocument> => {
+      return await request(`/api/v1/documents/${documentId}/review/verify`, {
+        method: "POST", headers: { "If-Match": `"${version}"` }, body: JSON.stringify(body),
       });
     },
   },

@@ -13,7 +13,7 @@ regardless of a fact's verification status.
 """
 import uuid as uuid_module
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditLog
 from app.models.document import Document
-from app.models.fact import Fact
+from app.models.fact import Fact, bump_edit_version, check_edit_version
 from app.services.audit_service import log_action
 from app.services import field_trust_service, table_shape_service
 
@@ -58,7 +58,9 @@ async def release_fact(db: AsyncSession, tenant_id: UUID, fact_id: UUID, actor_i
     return fact
 
 
-async def confirm_fact(db: AsyncSession, tenant_id: UUID, fact_id: UUID, actor_id: UUID) -> Fact:
+async def confirm_fact(
+    db: AsyncSession, tenant_id: UUID, fact_id: UUID, actor_id: UUID, expected_version: Optional[int] = None,
+) -> Fact:
     """T51 — the single-fact human confirmation action: in_review -> verified.
 
     'machine' facts are never promoted here, same reasoning as T56's
@@ -71,6 +73,10 @@ async def confirm_fact(db: AsyncSession, tenant_id: UUID, fact_id: UUID, actor_i
     fact = await db.get(Fact, fact_id)
     if not fact or fact.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Fact not found")
+
+    # Confirming attests to a specific value -- refuse if the caller has
+    # not seen the value that is actually there now.
+    check_edit_version(fact, expected_version)
 
     if fact.status == "verified":
         raise HTTPException(status_code=409, detail="Fact is already verified")
@@ -85,6 +91,7 @@ async def confirm_fact(db: AsyncSession, tenant_id: UUID, fact_id: UUID, actor_i
     fact.verified_at = datetime.utcnow()
     fact.claimed_by_actor_id = None
     fact.claimed_at = None
+    bump_edit_version(fact)
     await db.flush()
 
     # TS4 — a real human just confirmed this field-shape was read
@@ -99,6 +106,33 @@ async def confirm_fact(db: AsyncSession, tenant_id: UUID, fact_id: UUID, actor_i
         details={"field_name": fact.field_name, "is_handwritten": fact.is_handwritten},
     )
 
+    return fact
+
+
+async def unconfirm_fact(db: AsyncSession, tenant_id: UUID, fact_id: UUID, actor_id: UUID) -> Fact:
+    """Review screen: withdraw a confirmation (verified -> in_review). Only
+    ever called for a confirmation the review screen itself made (a row
+    attestation being removed or reverted) -- the caller checks that the
+    fact is unchanged since, so a Workbench confirmation is never undone
+    from here."""
+    if actor_id is None:
+        raise ValueError("unconfirming requires an actor")
+    fact = await db.get(Fact, fact_id)
+    if not fact or fact.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Fact not found")
+    if fact.status != "verified":
+        raise HTTPException(status_code=409, detail="Fact is not verified")
+    previous_by = fact.verified_by_actor_id
+    fact.status = "in_review"
+    fact.verified_by_actor_id = None
+    fact.verified_at = None
+    bump_edit_version(fact)
+    await db.flush()
+    await log_action(
+        db, actor_id, tenant_id, "fact.unconfirm",
+        resource_type="fact", resource_id=fact.id,
+        details={"field_name": fact.field_name, "previously_verified_by": str(previous_by) if previous_by else None},
+    )
     return fact
 
 
@@ -135,6 +169,7 @@ async def resolve_stitch_ambiguity(db: AsyncSession, tenant_id: UUID, fact_id: U
     fact.status = "verified"
     fact.verified_by_actor_id = actor_id
     fact.verified_at = datetime.utcnow()
+    bump_edit_version(fact)
     await db.flush()
 
     await log_action(
@@ -167,6 +202,7 @@ async def mark_fact_handwritten(db: AsyncSession, tenant_id: UUID, fact_id: UUID
     fact.is_handwritten = True
     if fact.status == "machine":
         fact.status = "in_review"
+    bump_edit_version(fact)
     await db.flush()
 
     await log_action(
@@ -236,6 +272,7 @@ async def bulk_confirm_facts(
         fact.verified_threshold = threshold
         fact.verified_corpus_folder_id = corpus_folder_id
         fact.verified_via_policy_version = policy_version
+        bump_edit_version(fact)
         fact.verified_batch_id = batch_id
         fact.claimed_by_actor_id = None
         fact.claimed_at = None
@@ -343,6 +380,7 @@ async def get_adjudication_queue(
                 "field_name": f.field_name,
                 "value": f.value,
                 "confidence": f.confidence,
+                "edit_version": f.edit_version,
                 "is_handwritten": f.is_handwritten,
                 "claimed_by_actor_id": str(f.claimed_by_actor_id) if f.claimed_by_actor_id else None,
                 "trust_signal": trust_signals.get(f.field_name),
@@ -354,6 +392,7 @@ async def get_adjudication_queue(
 
 async def bulk_edit_facts(
     db: AsyncSession, tenant_id: UUID, edits: List[Dict[str, Any]], actor_id: UUID, dry_run: bool = False,
+    audit_details: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """T80 — correct many facts' values in one action: the bulk version
     of the checking screen's single-fact [C] correct action (Section 5),
@@ -369,7 +408,8 @@ async def bulk_edit_facts(
     is the same code path as applying, not a second implementation that
     could drift from it.
 
-    `edits` is an explicit list of {"fact_id": UUID, "new_value": Any} —
+    `edits` is an explicit list of {"fact_id": UUID, "new_value": Any,
+    optional "expected_version": int} —
     exactly which facts change and what they change to is decided by the
     caller (the workbench UI, T54), not a find-and-replace pattern
     matched server-side.
@@ -394,6 +434,10 @@ async def bulk_edit_facts(
         if not fact:
             rows.append({"fact_id": str(fact_id), "error": "not found"})
             continue
+        # Shared with the review screen: an edit made against a stale view
+        # of this fact is refused for the whole batch (the request rolls
+        # back), never applied over someone else's newer change.
+        check_edit_version(fact, edit.get("expected_version"))
 
         previous_value = fact.value
         previous_status = fact.status
@@ -424,6 +468,7 @@ async def bulk_edit_facts(
             fact.verified_batch_id = None
             fact.claimed_by_actor_id = None
             fact.claimed_at = None
+            bump_edit_version(fact)
 
             await log_action(
                 db, actor_id, tenant_id, "fact.bulk_edit",
@@ -434,6 +479,7 @@ async def bulk_edit_facts(
                     "previous_value": previous_value,
                     "new_value": new_value,
                     "previous_status": previous_status,
+                    **(audit_details or {}),
                 },
             )
 
@@ -493,6 +539,7 @@ async def revert_bulk_edit_batch(db: AsyncSession, tenant_id: UUID, batch_id: UU
             continue
         fact.value = entry.details["previous_value"]
         fact.status = entry.details["previous_status"]
+        bump_edit_version(fact)
         reverted.append(str(fact.id))
 
     await db.flush()

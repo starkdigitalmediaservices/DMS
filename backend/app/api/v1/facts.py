@@ -1,5 +1,5 @@
 import uuid
-from typing import Any, List
+from typing import Any, List, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,9 @@ router = APIRouter(prefix="/facts", tags=["Facts"])
 class FactEdit(BaseModel):
     fact_id: uuid.UUID
     new_value: Any
+    # The fact's edit_version as the client loaded it; a mismatch is a 409
+    # (shared with the review screen). Omitted = no check, for older clients.
+    expected_version: Optional[int] = None
 
 
 class BulkEditRequest(BaseModel):
@@ -144,10 +147,14 @@ async def resolve_stitch_ambiguity_api(
 @router.post("/{fact_id}/confirm")
 async def confirm_fact_api(
     fact_id: uuid.UUID,
+    expected_version: Optional[int] = None,
     current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
     user_id = uuid.UUID(current_user.sub)
-    fact = await fact_verification_service.confirm_fact(db, tenant_id, fact_id, user_id)
-    return {"fact_id": str(fact.id), "status": fact.status, "verified_by_actor_id": str(fact.verified_by_actor_id)}
+    fact = await fact_verification_service.confirm_fact(db, tenant_id, fact_id, user_id, expected_version=expected_version)
+    return {
+        "fact_id": str(fact.id), "status": fact.status,
+        "verified_by_actor_id": str(fact.verified_by_actor_id), "edit_version": fact.edit_version,
+    }

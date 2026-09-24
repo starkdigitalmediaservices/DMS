@@ -78,6 +78,7 @@ async def get_fact_with_regions(db: AsyncSession, fact_id: UUID, tenant_id: UUID
         "field_name": fact.field_name,
         "value": fact.value,
         "confidence": fact.confidence,
+        "edit_version": fact.edit_version,
         "status": fact.status,
         "document_id": str(fact.document_id),
         "document_title": doc.title,
@@ -191,6 +192,7 @@ async def get_facts_for_document(db: AsyncSession, document_id: UUID, tenant_id:
             "field_name": fact.field_name,
             "value": fact.value,
             "confidence": fact.confidence,
+            "edit_version": fact.edit_version,
             "status": fact.status,
             "is_handwritten": fact.is_handwritten,
             "page_numbers": page_numbers,
@@ -220,6 +222,71 @@ def _unwrap_fact_value(value):
     if isinstance(value, dict) and "v" in value:
         return value["v"]
     return value
+
+
+def cluster_fact_rows(facts: list, page_number_by_id: dict, header_field_names: set) -> tuple[dict, list[dict]]:
+    """Groups a document's facts into table rows -- the row-identity logic
+    get_table_view_for_document's docstring describes, shared with the
+    review screen so both always agree on what a row is. Returns
+    ({header_field_name: first Fact}, [{"page_number", "anchor_y", "facts"}])
+    with rows in (page, y) order."""
+    header_facts: dict = {}
+    row_items: list[tuple[Fact, int, float]] = []  # (fact, anchor_page_number, anchor_y0)
+
+    for fact in facts:
+        if fact.field_name in header_field_names:
+            if fact.field_name not in header_facts:
+                header_facts[fact.field_name] = fact
+            continue
+
+        anchor = None
+        for r in fact.regions:
+            page_number = page_number_by_id.get(r.page_id)
+            if page_number is None:
+                continue
+            if anchor is None or (page_number, r.y0) < (anchor[0], anchor[1]):
+                anchor = (page_number, r.y0)
+        if anchor is None:
+            continue
+        row_items.append((fact, anchor[0], anchor[1]))
+
+    row_items.sort(key=lambda t: (t[1], t[2]))
+
+    # Exact groups first: real row identity, no guessing. Facts sharing a
+    # row_group_id always form one row regardless of how far apart their
+    # regions land on the page (see Fact.row_group_id).
+    exact_groups: dict = {}
+    heuristic_items: list[tuple[Fact, int, float]] = []
+    for fact, page_number, y0 in row_items:
+        if fact.row_group_id is not None:
+            group = exact_groups.get(fact.row_group_id)
+            if group is None:
+                group = {"page_number": page_number, "anchor_y": y0, "facts": []}
+                exact_groups[fact.row_group_id] = group
+            group["facts"].append(fact)
+            if (page_number, y0) < (group["page_number"], group["anchor_y"]):
+                group["page_number"], group["anchor_y"] = page_number, y0
+        else:
+            heuristic_items.append((fact, page_number, y0))
+
+    # Fallback for facts with no stored row identity (extracted before
+    # row_group_id existed) — old (page, y0)-proximity clustering,
+    # unchanged. heuristic_items is still in the (page, y0) sort order
+    # from row_items above, which this loop depends on.
+    heuristic_clusters: list[dict] = []
+    for fact, page_number, y0 in heuristic_items:
+        if (
+            heuristic_clusters
+            and heuristic_clusters[-1]["page_number"] == page_number
+            and abs(heuristic_clusters[-1]["anchor_y"] - y0) <= _ROW_CLUSTER_Y_TOLERANCE
+        ):
+            heuristic_clusters[-1]["facts"].append(fact)
+        else:
+            heuristic_clusters.append({"page_number": page_number, "anchor_y": y0, "facts": [fact]})
+
+    clusters = list(exact_groups.values()) + heuristic_clusters
+    clusters.sort(key=lambda c: (c["page_number"], c["anchor_y"]))
+    return header_facts, clusters
 
 
 async def get_table_view_for_document(db: AsyncSession, document_id: UUID, tenant_id: UUID) -> dict:
@@ -284,62 +351,8 @@ async def get_table_view_for_document(db: AsyncSession, document_id: UUID, tenan
     pages_res = await db.execute(select(DocumentPage).where(DocumentPage.id.in_(page_ids)))
     page_number_by_id = {p.id: p.page_number for p in pages_res.scalars().all()}
 
-    page_header: dict = {}
-    row_items: list[tuple[Fact, int, float]] = []  # (fact, anchor_page_number, anchor_y0)
-
-    for fact in facts:
-        if fact.field_name in header_field_names:
-            if fact.field_name not in page_header:
-                page_header[fact.field_name] = _unwrap_fact_value(fact.value)
-            continue
-
-        anchor = None
-        for r in fact.regions:
-            page_number = page_number_by_id.get(r.page_id)
-            if page_number is None:
-                continue
-            if anchor is None or (page_number, r.y0) < (anchor[0], anchor[1]):
-                anchor = (page_number, r.y0)
-        if anchor is None:
-            continue
-        row_items.append((fact, anchor[0], anchor[1]))
-
-    row_items.sort(key=lambda t: (t[1], t[2]))
-
-    # Exact groups first: real row identity, no guessing. Facts sharing a
-    # row_group_id always form one row regardless of how far apart their
-    # regions land on the page (see Fact.row_group_id).
-    exact_groups: dict = {}
-    heuristic_items: list[tuple[Fact, int, float]] = []
-    for fact, page_number, y0 in row_items:
-        if fact.row_group_id is not None:
-            group = exact_groups.get(fact.row_group_id)
-            if group is None:
-                group = {"page_number": page_number, "anchor_y": y0, "facts": []}
-                exact_groups[fact.row_group_id] = group
-            group["facts"].append(fact)
-            if (page_number, y0) < (group["page_number"], group["anchor_y"]):
-                group["page_number"], group["anchor_y"] = page_number, y0
-        else:
-            heuristic_items.append((fact, page_number, y0))
-
-    # Fallback for facts with no stored row identity (extracted before
-    # row_group_id existed) — old (page, y0)-proximity clustering,
-    # unchanged. heuristic_items is still in the (page, y0) sort order
-    # from row_items above, which this loop depends on.
-    heuristic_clusters: list[dict] = []
-    for fact, page_number, y0 in heuristic_items:
-        if (
-            heuristic_clusters
-            and heuristic_clusters[-1]["page_number"] == page_number
-            and abs(heuristic_clusters[-1]["anchor_y"] - y0) <= _ROW_CLUSTER_Y_TOLERANCE
-        ):
-            heuristic_clusters[-1]["facts"].append(fact)
-        else:
-            heuristic_clusters.append({"page_number": page_number, "anchor_y": y0, "facts": [fact]})
-
-    clusters = list(exact_groups.values()) + heuristic_clusters
-    clusters.sort(key=lambda c: (c["page_number"], c["anchor_y"]))
+    header_facts, clusters = cluster_fact_rows(facts, page_number_by_id, header_field_names)
+    page_header: dict = {name: _unwrap_fact_value(f.value) for name, f in header_facts.items()}
 
     rows_out = []
     for cluster in clusters:

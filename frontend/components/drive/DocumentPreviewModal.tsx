@@ -1,8 +1,10 @@
 "use client";
 import React, { useState, useEffect, useRef } from "react";
+import Link from "next/link";
 import {
   X,
   Download,
+  FileSearch,
   Star,
   ZoomIn,
   ZoomOut,
@@ -42,6 +44,8 @@ interface DocumentPreviewModalProps {
   doc: DocumentListItem | null;
   onClose: () => void;
   onToggleStar?: (doc: DocumentListItem) => void;
+  /** Page a search result matched on; the review screen opens there. */
+  initialPage?: number;
 }
 
 interface ChatMessage {
@@ -65,6 +69,7 @@ export function DocumentPreviewModal({
   doc,
   onClose,
   onToggleStar,
+  initialPage,
 }: DocumentPreviewModalProps) {
   const [zoom, setZoom] = useState(100);
   const [textContent, setTextContent] = useState<string | null>(null);
@@ -316,7 +321,8 @@ export function DocumentPreviewModal({
     setFactActionId(factId);
     setFactActionError(null);
     try {
-      await api.facts.bulkEdit([{ fact_id: factId, new_value: { v: editValue } }]);
+      const version = factsData?.facts.find((f) => f.fact_id === factId)?.edit_version;
+      await api.facts.bulkEdit([{ fact_id: factId, new_value: { v: editValue }, expected_version: version }]);
       setEditingFactId(null);
       setEditValue("");
       refetchFacts();
@@ -331,7 +337,7 @@ export function DocumentPreviewModal({
     setFactActionId(factId);
     setFactActionError(null);
     try {
-      await api.facts.confirm(factId);
+      await api.facts.confirm(factId, factsData?.facts.find((f) => f.fact_id === factId)?.edit_version);
       refetchFacts();
     } catch (e: any) {
       setFactActionError(e?.message || "Failed to confirm this fact");
@@ -561,6 +567,17 @@ export function DocumentPreviewModal({
             <Sparkles className="w-4 h-4 text-amber-300 animate-spin-slow" />
             <span>AI Chatbot</span>
           </button>
+
+          {(isPdf || isImage) && (
+            <Link
+              href={`/review?doc=${encodeURIComponent(doc.id)}${initialPage ? `&page=${initialPage}` : ""}`}
+              className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-full text-xs font-semibold border border-white/20 transition-all"
+              title="Open the side-by-side review screen: scan on the left, extracted text on the right"
+            >
+              <FileSearch className="w-4 h-4" />
+              <span>Review</span>
+            </Link>
+          )}
 
           {doc.download_url && (
             <a

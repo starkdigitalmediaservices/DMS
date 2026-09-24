@@ -34,6 +34,8 @@ _TENANT_SCOPED_TABLES_CHILD_FIRST = [
     "entity_dg_edges",
     "entity_dg_nodes",
     "chat_dg_sessions",
+    "doc_dg_review_states",
+    "doc_dg_review_originals",
     "doc_dg_document_versions",
     "doc_dg_documents",
     "doc_dg_templates",
@@ -51,6 +53,8 @@ _TENANT_SCOPED_TABLES_CHILD_FIRST = [
     # tenant an audit row references is therefore pinned in place by
     # fk_audit_dg_logs_actor_tenant and cannot be purged — see the skip in
     # the fixture below rather than trying to delete around the trigger.
+    # doc_dg_review_audit is append-only the same way; every row it holds is
+    # mirrored by an audit_dg_logs row, so its tenant is already pinned.
     "iam_dg_users",
 ]
 

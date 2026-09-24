@@ -1,10 +1,11 @@
 from fastapi import APIRouter
-from . import auth, documents, search, folders, chat, admin, health, connectors, email_webhook, facts, entities, records, governance, departments, export, i18n, templates, billing, users
+from . import auth, documents, search, folders, chat, admin, health, connectors, email_webhook, facts, entities, records, governance, departments, export, i18n, templates, billing, users, review
 
 api_router = APIRouter(prefix='/api/v1')
 api_router.include_router(health.router, tags=['health'])
 api_router.include_router(i18n.router, tags=['i18n'])
 api_router.include_router(auth.router, prefix='/auth', tags=['auth'])
+api_router.include_router(review.router)
 api_router.include_router(documents.router, prefix='/documents', tags=['documents'])
 api_router.include_router(folders.router)
 api_router.include_router(search.router, prefix='/search', tags=['search'])

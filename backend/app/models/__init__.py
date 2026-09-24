@@ -30,6 +30,7 @@ from app.models.ocr_archive import OCRArchive
 from app.models.vlm_archive import VLMArchive
 from app.models.field_trust_signal import FieldTrustSignal
 from app.models.search_glossary import SearchGlossaryTerm
+from app.models.review import ReviewOriginal, ReviewState, ReviewAuditEntry
 from app.database import Base
 
 # Every model must be imported here so SQLAlchemy's declarative registry
@@ -44,7 +45,8 @@ __all__ = [
     "EntityNode", "EntityEdge", "Record", "RecordAmendment", "CorpusCalibration",
     "Department", "DepartmentMember", "DepartmentFolder", "RetentionClass",
     "Translation", "Subscription", "License", "TableShapeDecision",
-    "OCRArchive", "VLMArchive", "FieldTrustSignal", "SearchGlossaryTerm", "Base",
+    "OCRArchive", "VLMArchive", "FieldTrustSignal", "SearchGlossaryTerm",
+    "ReviewOriginal", "ReviewState", "ReviewAuditEntry", "Base",
 ]
 
 

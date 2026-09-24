@@ -146,6 +146,9 @@ export default function DrivePage() {
 
   // Document Previewer Modal State
   const [previewDoc, setPreviewDoc] = useState<DocumentListItem | null>(null);
+  // The page a search hit matched on, remembered per document so every other
+  // way of opening a preview (which never sets it) keeps page 1.
+  const [previewPage, setPreviewPageState] = useState<{ docId: string; page: number } | null>(null);
 
   // UI State
   const [showDetailPanel, setShowDetailPanel] = useState(false);
@@ -985,6 +988,7 @@ export default function DrivePage() {
       is_trashed: false,
       download_url: res.download_url,
     };
+    setPreviewPageState(res.page_number ? { docId: res.document_id, page: res.page_number } : null);
     setPreviewDoc(searchDocItem);
   };
 
@@ -1569,6 +1573,7 @@ export default function DrivePage() {
       <DocumentPreviewModal
         isOpen={!!previewDoc}
         doc={previewDoc}
+        initialPage={previewDoc && previewPage?.docId === previewDoc.id ? previewPage.page : undefined}
         onClose={() => setPreviewDoc(null)}
         onToggleStar={async (d) => {
           if (isUUID(d.id)) {

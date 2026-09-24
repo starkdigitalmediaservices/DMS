@@ -3,7 +3,7 @@ import json
 import csv
 import logging
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +164,41 @@ class _ChandraFullTextHTMLParser:
         return text.strip()
 
 
+_LAYOUT_BLOCK_KEYS = ("id", "block_type", "html", "bbox")
+
+
+def _trim_chandra_layout(block: Any) -> Optional[Dict[str, Any]]:
+    """Keeps only what a layout consumer needs from one node of Datalab's
+    json tree (id, block_type, html, bbox in the page's own pixel space,
+    children). Drops `images` (base64 crops of Picture blocks, can be
+    megabytes per page), `polygon` (redundant with bbox) and the rest."""
+    if not isinstance(block, dict):
+        return None
+    out = {k: block.get(k) for k in _LAYOUT_BLOCK_KEYS if k in block}
+    children = [c for c in (_trim_chandra_layout(ch) for ch in block.get("children") or []) if c]
+    if children:
+        out["children"] = children
+    return out
+
+
+def _chandra_layout_from_response(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The root "Page" block of the json output, trimmed. Its bbox is the
+    only statement of the pixel space every child bbox is in (Datalab
+    rescales the image it was sent), so it is kept, not normalised here."""
+    tree = data.get("json")
+    if not isinstance(tree, dict):
+        return None
+    page_blocks = [c for c in tree.get("children") or [] if isinstance(c, dict)]
+    if not page_blocks:
+        return None
+    return {"engine": "chandra", "format": "datalab_json", "page": _trim_chandra_layout(page_blocks[0])}
+
+
 def _chandra_ocr_image(pil_img) -> str:
+    return _chandra_ocr_image_with_layout(pil_img)[0]
+
+
+def _chandra_ocr_image_with_layout(pil_img) -> Tuple[str, Optional[Dict[str, Any]]]:
     """OCR via Chandra/Datalab's /convert endpoint, called synchronously
     (this runs inside a thread via asyncio.to_thread, same as the
     tesseract/paddle engines above) — a plain httpx.Client with
@@ -174,7 +208,13 @@ def _chandra_ocr_image(pil_img) -> str:
     readable text (paragraphs and tables both), unlike ChandraVLMProvider
     which maps only table cells onto a field schema for the Facts
     pipeline — this is the general-purpose OCR replacement for
-    tesseract/paddle on handwritten/scanned pages."""
+    tesseract/paddle on handwritten/scanned pages.
+
+    Asks for html AND json in the same call (no extra cost per page): the
+    text still comes from the html, exactly as before, and the json layout
+    tree (block types + bboxes) is returned alongside so it is persisted
+    with the page instead of discarded — the review screen builds its
+    heading/paragraph/table blocks from it."""
     import time
     import httpx
     from app.config import settings
@@ -191,7 +231,7 @@ def _chandra_ocr_image(pil_img) -> str:
             "https://www.datalab.to/api/v1/convert",
             headers={"X-API-Key": api_key},
             files={"file": ("page.png", buf.getvalue(), "image/png")},
-            data={"output_format": "html", "mode": "accurate"},
+            data={"output_format": "html,json", "mode": "accurate", "extras": "table_cell_bboxes"},
         )
         if submit.status_code != 200:
             raise Exception(f"Chandra convert request failed with status {submit.status_code}: {submit.text}")
@@ -211,7 +251,7 @@ def _chandra_ocr_image(pil_img) -> str:
             data = poll.json()
             status = data.get("status")
             if status == "complete":
-                return _ChandraFullTextHTMLParser().feed(data.get("html") or "")
+                return _ChandraFullTextHTMLParser().feed(data.get("html") or ""), _chandra_layout_from_response(data)
             if status == "failed":
                 raise Exception(f"Chandra conversion failed: {data.get('error')}")
         raise Exception(f"Chandra conversion did not complete within {timeout}s")
@@ -347,6 +387,7 @@ def extract_pages_from_file(file_bytes: bytes, filename: str, ocr_engine: str = 
 def _extract_image(file_bytes: bytes, filename: str, ocr_engine: str = "tesseract") -> List[Dict[str, Any]]:
     text = ""
     words: List[Dict[str, Any]] = []
+    layout: Optional[Dict[str, Any]] = None
     img_size = None
     try:
         from PIL import Image
@@ -358,7 +399,8 @@ def _extract_image(file_bytes: bytes, filename: str, ocr_engine: str = "tesserac
         elif ocr_engine == "groq":
             text = _groq_ocr_image(img) or ""
         elif ocr_engine == "chandra":
-            text = _chandra_ocr_image(img) or ""
+            text, layout = _chandra_ocr_image_with_layout(img)
+            text = text or ""
             # T05 — Chandra's /convert endpoint (used here in plain-text
             # mode) returns no per-word coordinates, so a chandra-OCR'd
             # image still falls back to page-level regions, same as
@@ -388,13 +430,16 @@ def _extract_image(file_bytes: bytes, filename: str, ocr_engine: str = "tesserac
     if failed:
         text = f"Image document: {filename}"
 
-    return [{
+    page = {
         "page_number": 1,
         "text": text.strip(),
         "words": [] if failed else words,
         "bbox": {"width": float(img_size[0]), "height": float(img_size[1])} if img_size else {},
         "extraction_failed": failed
-    }]
+    }
+    if layout and not failed:
+        page["layout"] = layout
+    return [page]
 
 
 def _extract_pdf(file_bytes: bytes, filename: str = "", ocr_engine: str = "tesseract") -> List[Dict[str, Any]]:
@@ -405,6 +450,7 @@ def _extract_pdf(file_bytes: bytes, filename: str = "", ocr_engine: str = "tesse
             for i, page in enumerate(pdf.pages):
                 text = page.extract_text() or ""
                 raw_words = page.extract_words() or []
+                layout = None
 
                 # T05 — carry word-level regions from the extractor to the
                 # fact writer instead of discarding them here. Normalised
@@ -438,7 +484,8 @@ def _extract_pdf(file_bytes: bytes, filename: str = "", ocr_engine: str = "tesse
                         if ocr_engine == "paddle":
                             ocr_text = _paddle_ocr_image(pil_img) or ""
                         elif ocr_engine == "chandra":
-                            ocr_text = _chandra_ocr_image(pil_img) or ""
+                            ocr_text, layout = _chandra_ocr_image_with_layout(pil_img)
+                            ocr_text = ocr_text or ""
                         elif ocr_engine == "groq":
                             ocr_text = _groq_ocr_image(pil_img) or ""
                         else:
@@ -469,13 +516,16 @@ def _extract_pdf(file_bytes: bytes, filename: str = "", ocr_engine: str = "tesse
                     text = f"Scanned page {i+1} of document {filename}"
                     failed = True
 
-                pages.append({
+                page_out = {
                     "page_number": i + 1,
                     "text": text.strip(),
                     "words": words,
                     "bbox": {"width": float(page.width), "height": float(page.height)},
                     "extraction_failed": failed
-                })
+                }
+                if layout and not failed:
+                    page_out["layout"] = layout
+                pages.append(page_out)
     except Exception as e:
         logger.error(f"Error parsing PDF with pdfplumber: {e}")
         pages.append({

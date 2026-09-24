@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, event, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -646,6 +646,42 @@ async def _audit(
     return entry
 
 
+async def _finish(db: AsyncSession, tenant_id: UUID, document_id: UUID, role: str) -> Dict[str, Any]:
+    """After a saved change: the full document (what the UI shows), with the
+    search index brought in line with it in the same transaction."""
+    from app.services import review_search
+
+    result = await get_review_document(db, tenant_id, document_id, role)
+    doc = await db.get(Document, document_id)
+    changed, index_changed = await review_search.sync_review_chunks(db, doc, result)
+    if index_changed:
+        # Cached search results (5 min, per tenant) would otherwise keep
+        # showing the old -- or an undone -- correction.
+        from app.services.cache_service import invalidate_tenant_cache
+
+        await invalidate_tenant_cache(str(tenant_id))
+    if changed:
+        # Queued only once this request's transaction has committed, so the
+        # worker never looks for a chunk that isn't visible yet -- and never
+        # at all if the save rolls back.
+        db.info.setdefault("review_embed_ids", []).extend(changed)
+        if not db.info.get("review_embed_hooked"):
+            db.info["review_embed_hooked"] = True
+            event.listen(db.sync_session, "after_commit", _queue_embeddings_after_commit)
+            event.listen(db.sync_session, "after_rollback", _drop_pending_embeddings)
+    return result
+
+
+def _queue_embeddings_after_commit(session) -> None:
+    from app.services import review_search
+
+    review_search.enqueue_embedding(session.info.pop("review_embed_ids", []))
+
+
+def _drop_pending_embeddings(session) -> None:
+    session.info.pop("review_embed_ids", None)
+
+
 def _touch(state: ReviewState, actor_id: UUID) -> None:
     state.version += 1
     state.updated_at = datetime.utcnow()
@@ -780,7 +816,7 @@ async def edit_cell(
                      row=ri, col=col, old_value=old_text, new_value=value)
     _touch(state, actor_id)
     await db.flush()
-    return await get_review_document(db, tenant_id, document_id, role)
+    return await _finish(db, tenant_id, document_id, role)
 
 
 async def edit_text_block(
@@ -802,7 +838,7 @@ async def edit_text_block(
     await _audit(db, tenant_id, document_id, actor_id, "edit_text", block_id=block_id, old_value=old, new_value=text)
     _touch(state, actor_id)
     await db.flush()
-    return await get_review_document(db, tenant_id, document_id, role)
+    return await _finish(db, tenant_id, document_id, role)
 
 
 async def revert(
@@ -870,7 +906,7 @@ async def revert(
             raise HTTPException(status_code=400, detail="Nothing to revert on this block (revert table cells individually; delete added blocks)")
     _touch(state, actor_id)
     await db.flush()
-    return await get_review_document(db, tenant_id, document_id, role)
+    return await _finish(db, tenant_id, document_id, role)
 
 
 async def add_row(
@@ -899,7 +935,7 @@ async def add_row(
                  new_value={"after_row_id": after_row_id})
     _touch(state, actor_id)
     await db.flush()
-    return await get_review_document(db, tenant_id, document_id, role)
+    return await _finish(db, tenant_id, document_id, role)
 
 
 async def delete_row(
@@ -923,7 +959,7 @@ async def delete_row(
     await _audit(db, tenant_id, document_id, actor_id, "delete_row", block_id=block_id, row_id=row_id, row=ri, old_value=old)
     _touch(state, actor_id)
     await db.flush()
-    return await get_review_document(db, tenant_id, document_id, role)
+    return await _finish(db, tenant_id, document_id, role)
 
 
 async def add_block(
@@ -942,7 +978,7 @@ async def add_block(
                  new_value={"type": block_type, "text": text, "after_block_id": after_block_id})
     _touch(state, actor_id)
     await db.flush()
-    return await get_review_document(db, tenant_id, document_id, role)
+    return await _finish(db, tenant_id, document_id, role)
 
 
 async def delete_block(
@@ -963,7 +999,7 @@ async def delete_block(
                  old_value={"type": block["type"], "text": block.get("text")})
     _touch(state, actor_id)
     await db.flush()
-    return await get_review_document(db, tenant_id, document_id, role)
+    return await _finish(db, tenant_id, document_id, role)
 
 
 async def revert_all(
@@ -1020,7 +1056,7 @@ async def revert_all(
                  new_value={"reverted_fact_ids": reverted, "skipped": skipped})
     _touch(state, actor_id)
     await db.flush()
-    result = await get_review_document(db, tenant_id, document_id, role)
+    result = await _finish(db, tenant_id, document_id, role)
     result["revert_all"] = {"reverted": len(reverted), "skipped": skipped}
     return result
 
@@ -1083,7 +1119,7 @@ async def set_verified(
                      block_id=block_id, row_id=row_id, row=ri, old_value=old, new_value=row.get("verification"))
     _touch(state, actor_id)
     await db.flush()
-    return await get_review_document(db, tenant_id, document_id, role)
+    return await _finish(db, tenant_id, document_id, role)
 
 
 async def get_history(

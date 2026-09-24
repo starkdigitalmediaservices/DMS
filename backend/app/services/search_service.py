@@ -669,6 +669,7 @@ async def search(
         JOIN doc_dg_documents d ON c.document_id = d.id
         LEFT JOIN doc_dg_document_versions v ON v.id = d.current_version_id
         WHERE d.tenant_id = CAST(:tenant_id AS uuid) AND d.status = 'indexed' AND d.is_trashed = false {filter_str}
+          AND c.embedding IS NOT NULL  -- review corrections wait here until the worker embeds them
         ORDER BY c.embedding <=> CAST(:query_embedding AS vector)
         LIMIT {candidate_limit}
     """)

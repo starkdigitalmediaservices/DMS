@@ -596,6 +596,29 @@ async def _cleanup_trashed_items_async() -> None:
         await task_engine.dispose()
 
 
+async def _embed_review_chunks_async(chunk_ids) -> list:
+    from app.services.review_search import embed_chunks
+    task_engine, TaskSession = _new_task_db_session_factory()
+    try:
+        async with TaskSession() as db:
+            done, missing = await embed_chunks(db, chunk_ids, get_embed_provider().embed)
+            logger.info("Review corrections: embedded %d chunk(s), %d not visible yet", done, len(missing))
+            return missing
+    finally:
+        await task_engine.dispose()
+
+
+@celery_app.task(name="app.tasks.embed_review_chunks_task", bind=True, max_retries=5, default_retry_delay=3)
+def embed_review_chunks_task(self, chunk_ids) -> None:
+    """Semantic-search half of review-screen search sync (review_search.py).
+    Retries a few times for chunks not visible yet; a chunk deleted in the
+    meantime (its correction was undone) simply stays missing."""
+    import asyncio
+    missing = asyncio.run(_embed_review_chunks_async(chunk_ids))
+    if missing and self.request.retries < self.max_retries:
+        raise self.retry(args=[missing])
+
+
 @celery_app.task(name="app.tasks.cleanup_trashed_items_task")
 def cleanup_trashed_items_task() -> None:
     import asyncio

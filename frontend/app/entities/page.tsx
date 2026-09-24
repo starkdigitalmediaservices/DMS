@@ -22,6 +22,7 @@ import RegionHighlightViewer from "@/components/drive/RegionHighlightViewer";
 import { useI18n } from "@/lib/i18n";
 import { useRole } from "@/lib/permissions";
 import { humanFieldName } from "@/lib/fieldLabels";
+import EvidenceViewer, { type EvidenceRequest } from "@/components/entities/EvidenceViewer";
 
 interface FieldProvenance {
   kind: "base" | "amendment";
@@ -67,10 +68,24 @@ interface AppearsIn {
   mentions: { fact_id: string; field_name: string; value: any; page_numbers: number[]; how: "linked" | "same_name" }[];
 }
 
-/** Opens the Workbench document view on exactly this value's spot on the
- *  scan, with a way back to this entity. */
-function showOnPageHref(fact: { document_id: string; fact_id: string }, nodeId: string): string {
-  return `/workbench?doc=${encodeURIComponent(fact.document_id)}&fact=${encodeURIComponent(fact.fact_id)}&from=entity&entity=${encodeURIComponent(nodeId)}`;
+/** Proof for one value: the evidence viewer opens on its page only. */
+function evidenceFor(fact: FactRef): EvidenceRequest {
+  return {
+    documentId: fact.document_id,
+    documentTitle: fact.document_title || "Document",
+    items: [{ factId: fact.fact_id, label: `${humanFieldName(fact.field_name)}: ${formatValue(fact.value)}`, pages: fact.page_numbers }],
+  };
+}
+
+/** Proof for a document in "Appears in": its mention pages only. */
+function evidenceForDocument(a: AppearsIn, startFactId?: string): EvidenceRequest {
+  const start = a.mentions.find((m) => m.fact_id === startFactId) || a.mentions[0];
+  return {
+    documentId: a.document_id,
+    documentTitle: a.document_title || "Document",
+    items: a.mentions.map((m) => ({ factId: m.fact_id, label: `${humanFieldName(m.field_name)}: ${formatValue(m.value)}`, pages: m.page_numbers })),
+    startPage: start?.page_numbers[0],
+  };
 }
 
 function pagesText(pages: number[]): string {
@@ -211,6 +226,10 @@ export default function Entity360Page() {
   const [historyLoading, setHistoryLoading] = useState(false);
 
   const [viewingFactId, setViewingFactId] = useState<string | null>(null);
+  // "Show on page" opens read-only proof on top of this page -- closing it
+  // leaves the page (and its scroll position) exactly as it was.
+  const [evidence, setEvidence] = useState<EvidenceRequest | null>(null);
+  const canOpenWorkbench = roleCan("facts.review");
   const [edgeActionLoading, setEdgeActionLoading] = useState<string | null>(null);
 
   // Clicking a linked entity's "View" replaced the whole 360 view with no
@@ -473,10 +492,10 @@ export default function Entity360Page() {
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       {e.evidence && (
-                        <Link href={showOnPageHref(e.evidence, data.node.id)} className="flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline"
-                          title="Open the scanned page where this link was read, with the value outlined">
+                        <button type="button" onClick={() => setEvidence(evidenceFor(e.evidence!))} className="flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline"
+                          title="See the original page where this link was read, with the value outlined">
                           <FileText className="w-3 h-3" /> Show on page
-                        </Link>
+                        </button>
                       )}
                       <EdgeStatusBadge status={e.status} />
                       {canEditGraph && e.status === "held" && (
@@ -549,10 +568,10 @@ export default function Entity360Page() {
                           Revert
                         </button>
                       )}
-                      <Link href={showOnPageHref(e.fact, data.node.id)} className="flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline"
-                        title="Open the scanned page with this value outlined">
+                      <button type="button" onClick={() => setEvidence(evidenceFor(e.fact))} className="flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline"
+                        title="See the original page with this value outlined">
                         <FileText className="w-3 h-3" /> Show on page
-                      </Link>
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -581,11 +600,10 @@ export default function Entity360Page() {
                           </span>
                         )}
                       </span>
-                      <Link href={showOnPageHref({ document_id: a.document_id, fact_id: a.mentions[0].fact_id }, data.node.id)}
-                        onClick={(ev) => ev.stopPropagation()}
+                      <button type="button" onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); setEvidence(evidenceForDocument(a)); }}
                         className="shrink-0 flex items-center gap-1 font-bold text-[#0d2e5c] hover:underline">
                         <FileText className="w-3 h-3" /> Show on page
-                      </Link>
+                      </button>
                     </summary>
                     <ul className="mt-2 flex flex-col gap-1 border-t border-[#f0f0f0] pt-2">
                       {a.mentions.map((m) => (
@@ -594,8 +612,8 @@ export default function Entity360Page() {
                             <span className="text-[#444746]">{pagesText(m.page_numbers) || "page unknown"} · {humanFieldName(m.field_name)}:</span>{" "}
                             {formatValue(m.value)}
                           </span>
-                          <Link href={showOnPageHref({ document_id: a.document_id, fact_id: m.fact_id }, data.node.id)}
-                            className="shrink-0 font-semibold text-[#0d2e5c] hover:underline">Show</Link>
+                          <button type="button" onClick={() => setEvidence(evidenceForDocument(a, m.fact_id))}
+                            className="shrink-0 font-semibold text-[#0d2e5c] hover:underline">Show</button>
                         </li>
                       ))}
                     </ul>
@@ -682,6 +700,10 @@ export default function Entity360Page() {
               </div>
             </div>
           </div>
+        )}
+
+        {evidence && data && (
+          <EvidenceViewer evidence={evidence} canOpenWorkbench={canOpenWorkbench} entityId={data.node.id} onClose={() => setEvidence(null)} />
         )}
 
         {viewingFactId && (

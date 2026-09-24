@@ -24,6 +24,8 @@ interface Props {
   focusBoxes?: ReviewBox[];
   /** Label on that outline. */
   focusLabel?: string;
+  /** When set, prev/next only move between these pages (evidence viewer). */
+  pageList?: number[];
 }
 
 const MIN_ZOOM = 0.4;
@@ -46,7 +48,10 @@ const pct = (b: Omit<ReviewBox, "page">) => ({
 });
 
 /** Left pane: the scanned page with every block's box drawn over it. */
-export default function ScanViewer({ documentId, page, pageCount, onPageChange, blocks, selected, hovered, onBoxClick, focusBoxes = [], focusLabel = "queue item" }: Props) {
+export default function ScanViewer({ documentId, page, pageCount, onPageChange, blocks, selected, hovered, onBoxClick, focusBoxes = [], focusLabel = "queue item", pageList }: Props) {
+  const listPos = pageList ? pageList.indexOf(page) : -1;
+  const prevPage = pageList ? (listPos > 0 ? pageList[listPos - 1] : null) : page > 1 ? page - 1 : null;
+  const nextPage = pageList ? (listPos >= 0 && listPos < pageList.length - 1 ? pageList[listPos + 1] : null) : page < pageCount ? page + 1 : null;
   const [zoom, setZoom] = useState(1);
   const [src, setSrc] = useState<string | null>(null);
   // Overlays are positioned in % of the image, so nothing can be scrolled
@@ -188,12 +193,14 @@ export default function ScanViewer({ documentId, page, pageCount, onPageChange, 
     <section aria-label="Scanned page" className="flex flex-col h-full min-h-0 bg-[#e9ecef] rounded-xl border border-[#e1e3e1] overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-white border-b border-[#e1e3e1] text-sm">
         <div className="flex items-center gap-1">
-          <button type="button" aria-label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}
+          <button type="button" aria-label="Previous page" disabled={prevPage === null} onClick={() => prevPage !== null && onPageChange(prevPage)}
             className="p-1.5 rounded-lg hover:bg-[#f0f4f9] disabled:opacity-40">
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <span className="tabular-nums text-[#444746]" data-testid="page-indicator">page {page} / {pageCount}</span>
-          <button type="button" aria-label="Next page" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}
+          <span className="tabular-nums text-[#444746]" data-testid="page-indicator">
+            {pageList && pageList.length > 1 ? `page ${page} (${listPos + 1} of ${pageList.length})` : pageList ? `page ${page}` : `page ${page} / ${pageCount}`}
+          </span>
+          <button type="button" aria-label="Next page" disabled={nextPage === null} onClick={() => nextPage !== null && onPageChange(nextPage)}
             className="p-1.5 rounded-lg hover:bg-[#f0f4f9] disabled:opacity-40">
             <ChevronRight className="w-4 h-4" />
           </button>

@@ -59,8 +59,8 @@ Use the included shell helper script or run minimal containers:
 
 ```bash
 # Option A: Run helper script
-chmod +x setup_postgres_redis.sh
-./setup_postgres_redis.sh
+chmod +x scripts/setup_postgres_redis.sh
+./scripts/setup_postgres_redis.sh
 
 # Option B: Run containers directly
 docker run -d --name dms-postgres -p 5432:5432 -e POSTGRES_DB=docsearch -e POSTGRES_USER=docsearch -e POSTGRES_PASSWORD=docsearch ankane/pgvector:latest

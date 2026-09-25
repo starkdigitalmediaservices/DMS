@@ -3,7 +3,7 @@
 SoW 3.10 · Status as of 2026-09-08, commit `e1af8ff` · See [ROADMAP.md](ROADMAP.md) for the whole-system picture.
 
 - [ ] **T81** — Licensing enforcement — **blocked on A5**
-  Plan definitions and signed on-prem licence-file verification both exist (migration `0033`). Placeholder pending the licensing model sign-off — see `T81_licensing_assumptions.md`.
+  Plan definitions and signed on-prem licence-file verification both exist (migration `0033`). Placeholder pending the licensing model sign-off — see `docs/decisions/T81_licensing_assumptions.md`.
 
 - [ ] **T90** — Local model provider on a 24GB GPU — **blocked on A2**
   Local VLM, OCR and embeddings/rerank all exist. No local LLM, so `airgapped.py` correctly refuses to start on those surfaces and names T90 as the reason, rather than silently falling back to a hosted API.

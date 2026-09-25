@@ -5,7 +5,7 @@ the real gazette's previously-known-failing left-hand page?
 Runs extract_facts_for_document() inside a DB transaction that is ALWAYS
 rolled back at the end -- never commits, so this cannot mutate the real
 tenant's real data. Prints what got extracted so the result can be judged
-by eye against T31_T32_regression_corpus_notes.md's documented failure.
+by eye against docs/testing/T31_T32_regression_corpus_notes.md's documented failure.
 
 Usage (inside the backend container):
     python3 scripts/verify_gazette_retry_live.py

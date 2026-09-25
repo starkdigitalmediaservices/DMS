@@ -18,7 +18,7 @@ if settings.air_gapped:
 def enforce_local(surface: str, provider_name: str) -> None:
     """T91 (partial) — call before resolving any provider that reaches an
     external API. Refuses to start rather than silently calling out, per
-    build_design.txt section 11: 'a missing local model raises an error,
+    docs/planning/build_design.txt section 11: 'a missing local model raises an error,
     never silently calls an API.'
     """
     if settings.air_gapped:

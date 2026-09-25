@@ -27,7 +27,7 @@ AsyncSessionLocal = async_sessionmaker(
 # docker-compose.yml), and superusers unconditionally bypass Row-Level
 # Security regardless of how carefully a policy is written — confirmed
 # live: `FORCE ROW LEVEL SECURITY` on 17 tenant-scoped tables was doing
-# nothing (D2_tenant_isolation_security_review.md, Finding 1).
+# nothing (docs/decisions/D2_tenant_isolation_security_review.md, Finding 1).
 #
 # `app_engine`/`AppSessionLocal` is a SEPARATE connection pool authenticating
 # as the restricted `dms_app` role instead (NOSUPERUSER NOBYPASSRLS,
@@ -51,7 +51,7 @@ else:
     logger.warning(
         "APP_POSTGRES_URL is not set -- FastAPI requests are falling back to the "
         "same superuser connection as everything else, so Row-Level Security "
-        "provides no real protection (see D2_tenant_isolation_security_review.md). "
+        "provides no real protection (see docs/decisions/D2_tenant_isolation_security_review.md). "
         "Set APP_POSTGRES_URL to the restricted `dms_app` role from migration 0046 "
         "to close this gap."
     )

@@ -74,7 +74,7 @@ async def get_tenant_db(
     not plain get_db(): it's the restricted, RLS-enforced connection
     (AppSessionLocal) with app.current_tenant_id actually set from the
     caller's own verified JWT, not just correctly-written policies sitting
-    disconnected from the request path (D2_tenant_isolation_security_review.md,
+    disconnected from the request path (docs/decisions/D2_tenant_isolation_security_review.md,
     Finding 2). Session-scoped (is_local=false) so it survives a mid-request
     db.commit() -- a real pattern in this codebase, not a hypothetical --
     and _reset_session_tenant_context (called on every exit path) is what

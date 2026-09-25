@@ -2,7 +2,7 @@
 
 Source: `Waqf_Project-feature-stitching_using_llm.zip`, provided by the user 2026-08-26, analyzed in full (code + docs, not just README claims).
 
-This is **new scope, not in the original SoW-derived `backlog.txt`**. Per D-9's own logic (scope additions need explicit sign-off, not silent inclusion), these are tracked separately here rather than inserted into `backlog.txt`. IDs use a `TS` prefix (table-stitching project origin) to keep them visually distinct from the SoW's `T`-numbered tasks. Nothing here is ported as code — each item is a *concept* re-implemented against our own Postgres/PaddleOCR/RLS/air-gapped architecture, since the source project is cloud-API-based (Chandra/Claude/Gemini/Sarvam via OpenRouter) and SQLite/flat-file-backed, both of which conflict with our T92 egress-zero posture and multi-tenant Postgres design.
+This is **new scope, not in the original SoW-derived `docs/planning/backlog.txt`**. Per D-9's own logic (scope additions need explicit sign-off, not silent inclusion), these are tracked separately here rather than inserted into `docs/planning/backlog.txt`. IDs use a `TS` prefix (table-stitching project origin) to keep them visually distinct from the SoW's `T`-numbered tasks. Nothing here is ported as code — each item is a *concept* re-implemented against our own Postgres/PaddleOCR/RLS/air-gapped architecture, since the source project is cloud-API-based (Chandra/Claude/Gemini/Sarvam via OpenRouter) and SQLite/flat-file-backed, both of which conflict with our T92 egress-zero posture and multi-tenant Postgres design.
 
 Build order below reflects dependency and payoff, not just the order the user asked about them.
 

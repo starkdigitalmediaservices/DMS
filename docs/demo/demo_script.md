@@ -87,7 +87,7 @@ into the SFTP folder, then refresh Drive to show it land.
 address. Then, in the pre-positioned terminal:
 ```bash
 cd "/home/stark/Work Space/DMS"
-python3 send_demo_email.py "/path/to/a/fresh/file.pdf"
+python3 scripts/send_demo_email.py "/path/to/a/fresh/file.pdf"
 ```
 > "I just sent that as an email a second ago. Give it about ten
 > seconds..."

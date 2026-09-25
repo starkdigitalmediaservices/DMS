@@ -16,8 +16,8 @@
 #   ✓ Enables and tests the services
 #
 # Run:
-#   chmod +x setup_postgres_redis.sh
-#   ./setup_postgres_redis.sh
+#   chmod +x scripts/setup_postgres_redis.sh
+#   ./scripts/setup_postgres_redis.sh
 #
 ###############################################################################
 

@@ -6,7 +6,7 @@ Prepared: 20-Aug-2026 · For: client demonstration, 21-Aug-2026
 This document is a complete technical study of the system: what it is, how
 it works, what it's built on, how it compares to conventional document
 management, and — honestly — what it doesn't do yet. It's written to
-brief a presenter, not to sell; the companion file `demo_script.md`
+brief a presenter, not to sell; the companion file `docs/demo/demo_script.md`
 handles the pitch.
 
 ---

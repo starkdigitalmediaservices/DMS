@@ -56,7 +56,7 @@ WAQF_GROUND_TRUTH = [
 # Gazette Register template, spread layout). STILL NOT a passing entry, but
 # for a narrower reason now. The left-hand page's JSON-parse flakiness
 # (malformed JSON on 3/3 attempts, 2026-08-28) is fixed as of 2026-09-01 —
-# see T31_T32_regression_corpus_notes.md's "the parse-retry follow-up was
+# see docs/testing/T31_T32_regression_corpus_notes.md's "the parse-retry follow-up was
 # built and it works" section: _call_vlm_with_parse_retry() recovers a
 # malformed response by retrying with a fresh (uncached) sample, live-
 # verified against this exact document. What's left is row-matching
@@ -66,7 +66,7 @@ WAQF_GROUND_TRUTH = [
 GAZETTE_DOC_ID = "139cd522-099e-4642-8199-10b6f6610694"
 GAZETTE_KNOWN_ISSUE = (
     "JSON-parse flakiness on the left-hand page is fixed (parse-retry loop, "
-    "2026-09-01, see T31_T32_regression_corpus_notes.md). Remaining gap: "
+    "2026-09-01, see docs/testing/T31_T32_regression_corpus_notes.md). Remaining gap: "
     "left/right row-matching completeness on this document's dense 18-row "
     "table is not yet consistently full-recall — needs more real spread "
     "samples (A1) to know if that's typical or this-document-specific."
@@ -86,7 +86,7 @@ GAZETTE_KNOWN_ISSUE = (
 # unrelated pages against each other under the wrong template, not a real
 # extraction-logic bug. Registered the real Form B template
 # (scripts/register_wardha_form_b.py) and reclassified. See
-# T31_T32_regression_corpus_notes.md's "Wardha.pdf was never a
+# docs/testing/T31_T32_regression_corpus_notes.md's "Wardha.pdf was never a
 # spread-layout document" for the full writeup.
 WARDHA_DOC_ID = "fc4263c7-4511-46c2-9590-dbb03458e8c7"
 WARDHA_GROUND_TRUTH = [
@@ -115,7 +115,7 @@ WARDHA_GROUND_TRUTH = [
 #
 # Ground truth hand-verified 2026-09-02 by rendering page 2 of each to
 # PNG and reading it directly against the extracted Facts (see
-# T31_T32_regression_corpus_notes.md).
+# docs/testing/T31_T32_regression_corpus_notes.md).
 AURANGABAD_SHIA_DOC_ID = "ab867aa4-9304-4b9f-a0c2-557b110c81ea"
 AURANGABAD_SHIA_GROUND_TRUTH = [
     ("sect", "Shia"),
@@ -221,7 +221,7 @@ async def main():
     overall = sum(recalls) / len(recalls)
     print("\n" + "=" * 70)
     print(f"Corpus size: 5 real documents (4 passing, avg {overall:.0f}% recall; 1 documented-failing)")
-    print("This is a starter, not the A1 reference corpus — see T31_T32_regression_corpus_notes.md")
+    print("This is a starter, not the A1 reference corpus — see docs/testing/T31_T32_regression_corpus_notes.md")
     print("=" * 70)
 
     return 0 if all(r == 100 for r in recalls) else 1

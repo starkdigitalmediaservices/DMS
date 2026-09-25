@@ -35,7 +35,7 @@ KEEP_TENANT_IDS = [
     "de7bbd90-72a9-4beb-9aec-e54ce58ee7e3",
     # Second real-looking account, d.kunalstarkdigital@gmail.com.
     "76f96812-33a2-41a2-a2f3-c0e66ccfbad4",
-    # admin@example.com — the seeded demo login documented in running_script.md.
+    # admin@example.com — the seeded demo login documented in docs/running_script.md.
     "4fdb4ffe-aa12-422c-a6c9-5341f2831b96",
     # Probe tenant created during the 2026-09-21 verification session.
     "8272ea41-43c8-4a0f-b7fb-197ff03ac1dd",

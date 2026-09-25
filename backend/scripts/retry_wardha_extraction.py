@@ -1,7 +1,7 @@
 """Retry Wardha.pdf's VLM extraction using the native Gemini provider
 (AI_VLM_PROVIDER switched from openrouter to gemini 2026-09-02 after the
 OpenRouter account ran out of credits mid-extraction -- see
-register_wardha_form_b.py and T31_T32_regression_corpus_notes.md).
+register_wardha_form_b.py and docs/testing/T31_T32_regression_corpus_notes.md).
 Template registration + classification already succeeded and persisted;
 this only retries the extraction step.
 

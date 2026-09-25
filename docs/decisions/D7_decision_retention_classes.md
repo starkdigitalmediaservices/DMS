@@ -3,7 +3,7 @@
 Status: **signed — 2026-08-24**
 Blocks (would be unblocked): T66 (retention policy engine, replacing the 30-day trash purge as the only retention behavior)
 Owner: BA
-Reference: backlog.txt T66; Governance module (h)
+Reference: docs/planning/backlog.txt T66; Governance module (h)
 
 ---
 

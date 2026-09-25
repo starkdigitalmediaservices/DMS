@@ -1,7 +1,7 @@
 # T94 — Closure note: resolved by D-1, no container level built
 
 Status: **closed — 2026-08-25, no code change required**
-Reference: backlog.txt T94 ("Project / Collection container level — does not exist today", depends on D-1); [[D1_decision_container_model.md]]; backend/app/models/department.py
+Reference: docs/planning/backlog.txt T94 ("Project / Collection container level — does not exist today", depends on D-1); [[docs/decisions/D1_decision_container_model.md]]; backend/app/models/department.py
 
 ---
 

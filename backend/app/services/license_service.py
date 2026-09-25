@@ -5,8 +5,8 @@ Two independent mechanisms, picked by settings.deployment_mode:
 - SaaS: usage (document count, storage bytes) is metered live against a
   subscription plan. See PLAN_DEFINITIONS below for the plan limits —
   every number is a placeholder pending real business sign-off (A5), not
-  a decided price sheet. See T81_licensing_assumptions.md at the repo
-  root for the full list.
+  a decided price sheet. See docs/decisions/T81_licensing_assumptions.md
+  for the full list.
 
 - On-prem/air-gapped: cannot phone home to check a subscription without
   breaking T92's egress-zero guarantee, so capacity is instead granted by
@@ -45,7 +45,7 @@ from app.models.document_version import DocumentVersion
 
 logger = logging.getLogger(__name__)
 
-# Placeholder tiers — see T81_licensing_assumptions.md. max_documents/
+# Placeholder tiers — see docs/decisions/T81_licensing_assumptions.md. max_documents/
 # max_storage_bytes are None for "unlimited". trial_days only applies to
 # the 'trial' plan.
 PLAN_DEFINITIONS = {
@@ -58,7 +58,7 @@ PLAN_DEFINITIONS = {
 # Public half of the offline signing keypair generate_license.py signs
 # with. Rotating this requires re-issuing every outstanding license.
 # DEV-ONLY keypair, generated for this scaffold — see
-# T81_licensing_assumptions.md. Before any real deployment, regenerate the
+# docs/decisions/T81_licensing_assumptions.md. Before any real deployment, regenerate the
 # pair and keep the private half out of version control entirely (a
 # secrets vault, not this repo) — its value here only exists so the
 # feature can be exercised end-to-end in dev.

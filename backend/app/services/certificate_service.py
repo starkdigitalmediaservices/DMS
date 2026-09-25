@@ -19,9 +19,9 @@ async def generate_section63_certificate(
     db: AsyncSession, tenant_id: UUID, actor_id: UUID, document_id: UUID,
 ) -> Tuple[bytes, str, str]:
     """T65 — Section 63 certificate: hash value, algorithm name, dual
-    signature blocks (build_design.txt Section 12/(h)). TEMPLATE ONLY —
+    signature blocks (docs/planning/build_design.txt Section 12/(h)). TEMPLATE ONLY —
     the wording has not been reviewed by legal counsel (assumption A3,
-    still open per backlog.txt). Every certificate this generates carries
+    still open per docs/planning/backlog.txt). Every certificate this generates carries
     a visible draft banner; it is a structural/technical placeholder, not
     an evidentiary instrument, until A3 clears."""
     if actor_id is None:
@@ -44,7 +44,7 @@ async def generate_section63_certificate(
         raise HTTPException(status_code=409, detail="Document has no current version to certify")
 
     # T63 tie-in: cite the tenant-wide audit chain's integrity status at
-    # generation time — the same evidentiary link build_design.txt draws
+    # generation time — the same evidentiary link docs/planning/build_design.txt draws
     # between "audit chain" and "Section 63 certificate".
     chain_status = await verify_chain_integrity(db, tenant_id)
 

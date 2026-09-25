@@ -7,7 +7,7 @@ unsafe).
 
 No suppression pipeline exists anywhere in this codebase to retrofit
 (confirmed by search before building this — see
-TS_backlog_colleague_features.md TS6), so this is new infrastructure,
+docs/planning/TS_backlog_colleague_features.md TS6), so this is new infrastructure,
 not a bug fix. Position is approximated from a LINE'S ORDER within its
 own page's text rather than a literal pixel Y-coordinate: no OCR
 provider in this pipeline (pdfplumber/tesseract/paddleocr) currently

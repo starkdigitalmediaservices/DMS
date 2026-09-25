@@ -3,7 +3,7 @@ every word OCR actually read survives into what gets stored and served
 back out.
 
 Adapted from a colleague's separate waqf-digitization project (see
-TS_backlog_colleague_features.md). Their system reconstructs a rendered
+docs/planning/TS_backlog_colleague_features.md). Their system reconstructs a rendered
 document and checks the OCR'd word survives into the viewer/Markdown/xlsx
 export. This system doesn't have an equivalent single "rendered document"
 — search results, chat citations, and the click-through viewer are all

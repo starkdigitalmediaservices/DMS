@@ -1,9 +1,9 @@
 # Decision D-3 — JWT access-token lifetime
 
 Status: **signed — 2026-08-25** (code already matches; this is the missing written record)
-Blocks: none currently — D-3 blocks no other task per backlog.txt, but was flagged in the same "start five things this week" item as T33 as something "wrong to ship on an evidence system"
+Blocks: none currently — D-3 blocks no other task per docs/planning/backlog.txt, but was flagged in the same "start five things this week" item as T33 as something "wrong to ship on an evidence system"
 Owner: Tech Lead
-Reference: backlog.txt D-3, "T33 and D-3 — silent OCR failure, and the 30-day JWT"; backend/app/config.py; commit 318c0e0
+Reference: docs/planning/backlog.txt D-3, "T33 and D-3 — silent OCR failure, and the 30-day JWT"; backend/app/config.py; commit 318c0e0
 
 ---
 

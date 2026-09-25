@@ -1,5 +1,5 @@
 """D-2 security fix -- Row-Level Security was enabled and correctly written
-across 17 tables (D2_tenant_isolation_security_review.md, Finding 1) but did
+across 17 tables (docs/decisions/D2_tenant_isolation_security_review.md, Finding 1) but did
 nothing, because the application connected as `docsearch`, a genuine
 Postgres superuser, and superusers unconditionally bypass RLS. These tests
 exercise the real fix: a restricted `dms_app` role (migration 0046,

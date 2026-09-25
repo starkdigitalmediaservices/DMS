@@ -2,7 +2,7 @@
 
 Both templates already existed in this dev DB, but only because they were
 created by hand during live testing while building the T31/T32 regression
-corpus (see T31_T32_regression_corpus_notes.md) — a fresh environment
+corpus (see docs/testing/T31_T32_regression_corpus_notes.md) — a fresh environment
 (a new dev DB, CI, another deployment) would have neither, and the two real
 documents in the regression corpus would fail to classify at all. This is
 still not T25's real goal (a template LIBRARY seeded from an official,

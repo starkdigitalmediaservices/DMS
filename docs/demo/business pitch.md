@@ -196,4 +196,4 @@ A few things I'd genuinely suggest, beyond the words themselves:
 
 ---
 
-*Prepared as a companion to `PROJECT_DEEP_DIVE.md` (the technical reference) — that document has the deeper Q&A and glossary if a conversation goes past what's here.*
+*Prepared as a companion to `docs/architecture/PROJECT_DEEP_DIVE.md` (the technical reference) — that document has the deeper Q&A and glossary if a conversation goes past what's here.*

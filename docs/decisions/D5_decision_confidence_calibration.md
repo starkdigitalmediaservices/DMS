@@ -3,7 +3,7 @@
 Status: **signed — 2026-08-24**
 Blocks (would be unblocked): T20 (real per-field confidence), T51/T52/T54/T55 (Human Verification Workbench), T30 (handwritten/degraded policy), T76 (completeness dashboard's confidence distribution)
 Owner: BA + Tech Lead
-Reference: backlog.txt T20, T51; Build Design Section 12
+Reference: docs/planning/backlog.txt T20, T51; Build Design Section 12
 
 ---
 

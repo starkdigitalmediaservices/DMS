@@ -1,7 +1,7 @@
 """TS1 — two-axis table stitching engine.
 
 Ported as a *concept*, not code, from a colleague's separate waqf
-feature-stitching project (see TS_backlog_colleague_features.md) — but
+feature-stitching project (see docs/planning/TS_backlog_colleague_features.md) — but
 adapted to how this system actually extracts data. That project detects
 table structure from raw OCR (no schema up front, so it reads printed
 column numbers like "(1)...(19)" off headers to know which columns a page

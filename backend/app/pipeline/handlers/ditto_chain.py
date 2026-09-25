@@ -45,7 +45,7 @@ def expand_ditto_chains(rows: List[Dict[str, Any]], columns: List[str], chain_an
 
     chain_anchor_column (opt-in, unused by any currently-registered
     template — no real register has confirmed which column, if any,
-    should play this role; see TS_backlog_colleague_features.md TS5):
+    should play this role; see docs/planning/TS_backlog_colleague_features.md TS5):
     when a template declares one, a genuine (non-ditto) change in that
     column's value resets EVERY column's chain, not just its own —
     modeling "a new anchor context starts here, don't carry the old

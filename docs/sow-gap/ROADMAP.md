@@ -111,12 +111,12 @@ decide against) are the two open decisions behind this list; both need a person,
 
 ## Documents this roadmap assumes you can find
 
-Decision documents, repo root: `D1_decision_container_model.md`, `D2_tenant_isolation_security_review.md`,
-`D3_decision_jwt_lifetime.md`, `D4_accuracy_data_summary.md`, `D5_decision_confidence_calibration.md`,
-`D7_decision_retention_classes.md`, `D8_decision_escrowed_links_in_exports.md`,
-`D9_drive_scope_inventory.md`. D6 has no document — it's the one item in this file with no
+Decision documents: `docs/decisions/D1_decision_container_model.md`, `docs/decisions/D2_tenant_isolation_security_review.md`,
+`docs/decisions/D3_decision_jwt_lifetime.md`, `docs/decisions/D4_accuracy_data_summary.md`, `docs/decisions/D5_decision_confidence_calibration.md`,
+`docs/decisions/D7_decision_retention_classes.md`, `docs/decisions/D8_decision_escrowed_links_in_exports.md`,
+`docs/decisions/D9_drive_scope_inventory.md`. D6 has no document — it's the one item in this file with no
 committed analysis to point to, because the underlying dependency (Surya) was never adopted.
 
-Architecture: `T09_technical_architecture_document.md`. Licensing assumptions: `T81_licensing_assumptions.md`.
+Architecture: `docs/architecture/T09_technical_architecture_document.md`. Licensing assumptions: `docs/decisions/T81_licensing_assumptions.md`.
 
 Test suite: 373 tests collected as of this commit (`docker compose exec backend pytest --collect-only -q`).

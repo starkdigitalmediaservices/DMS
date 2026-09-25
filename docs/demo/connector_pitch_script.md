@@ -87,7 +87,7 @@ point at the address.
 **Do (off-screen or in a small terminal, pre-positioned):**
 ```bash
 cd "/home/stark/Work Space/DMS"
-python3 send_demo_email.py "/path/to/a/never-uploaded/file.pdf"
+python3 scripts/send_demo_email.py "/path/to/a/never-uploaded/file.pdf"
 ```
 
 > "I just sent that as an email a second ago. Give it about ten

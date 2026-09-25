@@ -11,7 +11,7 @@ This runbook installs VeritasDocs on Kubernetes using the chart at
 
 ## Read this before you start: what "air-gapped" actually covers today
 
-Section 11 of `build_design.txt` describes a fully local install: a local
+Section 11 of `docs/planning/build_design.txt` describes a fully local install: a local
 VLM (Qwen2.5-VL-7B) and local OCR (PaddleOCR/Surya/Docling) instead of
 cloud APIs, a fail-closed toggle, and an egress-zero check (backlog
 T90/T91/T92). **Only part of that exists in this codebase right now:**
@@ -39,7 +39,7 @@ request to the six known external AI provider hosts at the network layer
 check. It's covered by `backend/tests/test_egress_guard.py`, which runs
 in CI on every push (`pytest tests/` in `.github/workflows/ci.yml`) —
 that's the "CI coverage" half of T92's backlog line. What's still missing
-is the *full* T92 scope build_design.txt describes: proving the complete
+is the *full* T92 scope docs/planning/build_design.txt describes: proving the complete
 pipeline (ingest, check, search) runs entirely offline, which needs
 T90's VLM half to exist. Ingestion + search *can* now run fully offline
 for OCR-only extraction (no VLM field extraction) — see step 6a below.

@@ -3,7 +3,7 @@
 Status: **signed — 2026-08-24**
 Blocks (would be unblocked): T65 (Section 63 certificate — also still gated on A3, see below), T67 (verified-layer boundary enforcement)
 Owner: Legal counsel
-Reference: backlog.txt T65, T67; "T67 is what makes tier-3 escrow safe. §11 requires it demonstrated on an evidence export that actually contains escrowed links."
+Reference: docs/planning/backlog.txt T65, T67; "T67 is what makes tier-3 escrow safe. §11 requires it demonstrated on an evidence export that actually contains escrowed links."
 
 ---
 

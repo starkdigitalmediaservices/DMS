@@ -4,7 +4,7 @@ actually enforce against.
 `docsearch` (POSTGRES_USER, everything else in this codebase connects as
 this) is a genuine Postgres superuser, and superusers unconditionally
 bypass RLS regardless of policy -- confirmed live in
-D2_tenant_isolation_security_review.md, Finding 1: 17 tables' `FORCE ROW
+docs/decisions/D2_tenant_isolation_security_review.md, Finding 1: 17 tables' `FORCE ROW
 LEVEL SECURITY` policies were doing nothing. Creates `dms_app`, NOSUPERUSER
 NOBYPASSRLS, granted exactly the DML this application needs (not DDL --
 migrations keep running as `docsearch`) -- database.py's new

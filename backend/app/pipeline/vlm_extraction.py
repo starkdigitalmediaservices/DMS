@@ -295,7 +295,7 @@ VLM_PARSE_RETRY_ATTEMPTS = 3
 async def _call_vlm_with_parse_retry(
     db: AsyncSession, vlm, file_hash: str, page_number: int, image_bytes: bytes, prompt: str,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
-    """T31/T32 follow-up (documented in T31_T32_regression_corpus_notes.md):
+    """T31/T32 follow-up (documented in docs/testing/T31_T32_regression_corpus_notes.md):
     on a real 1973 gazette's dense left-hand page, the VLM returned
     malformed JSON at a different position on 3 separate live attempts —
     not the two structural bugs already fixed (null bbox, raw newline),

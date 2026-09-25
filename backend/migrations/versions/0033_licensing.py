@@ -7,7 +7,7 @@ no tier names, limits, or enforcement mechanism were ever specified by the
 business. Per the user's explicit instruction (2026-08-26), this migration
 and the service built on top of it implement a REASONABLE DEFAULT model,
 not the real one — every number here is a placeholder pending real
-business sign-off. See T81_licensing_assumptions.md at the repo root for
+business sign-off. See docs/decisions/T81_licensing_assumptions.md for
 the full list of assumptions and what to change once the real model is
 decided.
 

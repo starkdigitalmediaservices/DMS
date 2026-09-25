@@ -14,7 +14,7 @@ https://claude.ai/code/artifact/e95d037e-9e38-4b5d-9ba8-2aa1eb1f4886
 | Watched folder (local) | `/home/stark/Work Space/DMS/connector_inbox/watched_folder/` |
 | Stark Drive (auto-sync) | `/home/stark/Stark Drive /` (note the trailing space — it's part of the real folder name) |
 | SFTP | host `192.168.30.65`, port `2222`, user `connector`, pass `connector123`, folder `/upload` |
-| Email-in | `cd "/home/stark/Work Space/DMS" && python3 send_demo_email.py "/path/to/file"` |
+| Email-in | `cd "/home/stark/Work Space/DMS" && python3 scripts/send_demo_email.py "/path/to/file"` |
 
 ---
 
@@ -103,8 +103,8 @@ app, no training.
 - Demo mailbox: `connector@dms.local` (a local test mail server, not
   real internet email — the demo never depends on real delivery being
   fast or reliable).
-- Run: `python3 send_demo_email.py` (sends a default demo PDF) or
-  `python3 send_demo_email.py "/path/to/file"` (sends any file).
+- Run: `python3 scripts/send_demo_email.py` (sends a default demo PDF) or
+  `python3 scripts/send_demo_email.py "/path/to/file"` (sends any file).
 - Checked every 10 seconds; attachments are extracted and the email is
   marked read so it's never processed twice.
 - A file that's already in the Drive from earlier gets silently skipped

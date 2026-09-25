@@ -5,7 +5,7 @@ the "Maharashtra State Wakf Gazette Register" spread template
 (df0aaa26-..., "Government Gazette, District Aurangabad, 1973") since
 before this session, and every "spread join" attempt against it failed
 (5/5 measurable page-pairs, 100% serial mismatch -- see
-T31_T32_regression_corpus_notes.md's "Wardha.pdf" entries and
+docs/testing/T31_T32_regression_corpus_notes.md's "Wardha.pdf" entries and
 accuracy_baseline.py's WARDHA_KNOWN_ISSUE). That was read as a possible
 real T26 structural gap (role:'serial' maybe not printed on both spread
 halves).

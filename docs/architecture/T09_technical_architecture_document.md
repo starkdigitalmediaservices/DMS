@@ -3,7 +3,7 @@
 Status: **signed — 2026-08-24**
 Blocks (now unblocked): T10 (entity graph schema) and everything cascading from it
 Owner: signed off by the project decision-maker on 2026-08-24. The Apache AGE evaluation formalizes a decision the build design doc already states ("Postgres tables for the graph... do not re-open it") — nothing here is a new judgment call.
-Reference: Build Design v0.3 Section 11 ("Two ways we install it"); backlog.txt T09
+Reference: Build Design v0.3 Section 11 ("Two ways we install it"); docs/planning/backlog.txt T09
 
 ---
 

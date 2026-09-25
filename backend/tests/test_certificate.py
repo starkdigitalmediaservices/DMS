@@ -15,7 +15,7 @@ from app.services.certificate_service import generate_section63_certificate
 @pytest.mark.asyncio
 async def test_generate_certificate_includes_hash_algorithm_and_signatures():
     """T65 — certificate carries hash value, algorithm name, and dual
-    signature blocks (build_design.txt Section 12/(h))."""
+    signature blocks (docs/planning/build_design.txt Section 12/(h))."""
     async with AsyncSessionLocal() as db:
         try:
             tenant_id = uuid.uuid4()

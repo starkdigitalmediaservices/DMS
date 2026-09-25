@@ -18,7 +18,7 @@ D-8 (signed 2026-08-24) settled the policy this enforces:
     has no room for a "this might not be true" footnote.
 
 Nothing calls this yet — T78 (general export) and T65 (certificate, still
-blocked on A3, see D8_decision_escrowed_links_in_exports.md) haven't been
+blocked on A3, see docs/decisions/D8_decision_escrowed_links_in_exports.md) haven't been
 built. This exists now so that when they are, the enforcement point
 already exists and can't be skipped or reimplemented inconsistently.
 """

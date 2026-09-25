@@ -7,7 +7,7 @@ app/tasks/worker.py) runs for free on every new upload, since it compares
 OCR's freshly-computed page text against chunks in the same ingestion
 pass — no re-OCR needed. This script does NOT have that luxury: raw OCR
 page text isn't archived anywhere for an already-ingested document (that
-archive is TS3, not built yet — see TS_backlog_colleague_features.md), so
+archive is TS3, not built yet — see docs/planning/TS_backlog_colleague_features.md), so
 checking a historical document means re-running OCR here. That's a real
 cost this incurs deliberately, not a shortcut; once TS3 lands, point this
 at the archive instead of re-OCRing.

@@ -1,6 +1,6 @@
 # VeritasDocs — Client Demo Script
 
-**Use with:** `veritas_demo_deck.html` (9 slides)
+**Use with:** `docs/demo/veritas_demo_deck.html` (9 slides)
 **Tone:** confident, consultative, benefit-led — you're reporting delivered value, not narrating a to-do list.
 **Timing:** ~60–90 seconds per slide, ~10–12 minutes total. Pause after each bolded transition line.
 

@@ -19,10 +19,10 @@
 | T03 | Move hardcoded thresholds into config | 🟡 Partial | `config_service.py` accessor exists; many thresholds (`relevance_threshold`, `rrf_k`, `chunk_size`, `embed_batch`, `trigram_threshold`) are seeded in migrations 0009, 0028, 0030. Some values still fall back to hard-coded defaults in calling code (e.g. `get_float("entity_dedup_similarity_threshold", 0.45)`) — the fallback path means the table isn't strictly required, which is the right pattern, but not every threshold from the backlog list is confirmed seeded |
 | T04 | Add provenance columns — page number, region coordinates, non-null at write time | ✅ Complete | `models/fact_region.py` with `x0/y0/x1/y1` (0–1 fractions); DB trigger in migration `0010` enforces non-null regions at write time; `Fact.regions` is a list relationship (multi-region support) |
 | T05 | Stop discarding word boxes in the chunker | 🟡 Partial | `page.py` model stores `width`, `height`, `rotation`, `skew`; VLM extraction writes `FactRegion` per field. However the OCR extractor still discards word-level bounding boxes for the pdfplumber path — words are extracted but `bbox` per word is not persisted to `FactRegion` for non-VLM documents |
-| T06 | Define coordinate contract (D-2) | ✅ Complete | `T06_decision_region_format.md` is **signed 2026-08-24**. Origin top-left, y grows down, 0–1 normalised fractions, per-page rotation/skew, list of regions. Unblocks T04/T05/workbench |
+| T06 | Define coordinate contract (D-2) | ✅ Complete | `docs/decisions/T06_decision_region_format.md` is **signed 2026-08-24**. Origin top-left, y grows down, 0–1 normalised fractions, per-page rotation/skew, list of regions. Unblocks T04/T05/workbench |
 | T07 | Audit events on every mutating document/folder path, plus view and download | 🟡 Partial | `audit_service.log_action()` is called from fact verification, entity graph, export, records, classification, governance. Coverage is wide but not exhaustive — e.g. folder moves, document trash/restore, and direct downloads are not verified to log in code |
 | T08 | Require actor identity at service boundary; reject anonymous mutations | ✅ Complete | `log_action()` raises `ValueError` if `actor_id is None`; same guard in every service function that mutates (`confirm_fact`, `bulk_confirm_facts`, `create_node`, `add_amendment`, etc.) |
-| T09 | D-2 — Technical Architecture Document | ✅ Complete | `T09_technical_architecture_document.md` exists (5 KB) |
+| T09 | D-2 — Technical Architecture Document | ✅ Complete | `docs/architecture/T09_technical_architecture_document.md` exists (5 KB) |
 | T95 | Localisation — EN + MR, translations table, Devanagari fonts, language switcher | 🟡 Partial | `i18n_service.py` + `models/translation.py` + migration `0032_i18n_translations.py` exists. API route at `/i18n/{locale}`. `User.locale` field present. Frontend language switcher — not confirmed present in frontend components |
 | T96 | Accessibility — GIGW 3.0 / WCAG 2.1 AA baseline audit | ❌ Pending | No accessibility audit or automated CI checks found in frontend or `.github` |
 | T98 | Set CI coverage threshold at today's number and raise as tests land | 🟡 Partial | `pytest.ini` has `--cov-fail-under=56`. Threshold exists but 56% is already set; automatic raising as tests land is not automated |
@@ -49,7 +49,7 @@
 
 | Task | Title | Status | Evidence |
 |------|-------|--------|----------|
-| T20 | Real per-field confidence (not hardcoded 0.9) | 🟡 Partial | VLM extraction (`vlm_extraction.py`) calls `classify_confidence()` from `template_service.py` which maps VLM-returned confidence strings to floats. D-5 (confidence calibration policy) is **signed** (`D5_decision_confidence_calibration.md` exists). However the confidence band mapping is per-field in the template, which is the right place — but only VLM-path facts get real confidence; non-VLM (chunk-only) facts carry no confidence |
+| T20 | Real per-field confidence (not hardcoded 0.9) | 🟡 Partial | VLM extraction (`vlm_extraction.py`) calls `classify_confidence()` from `template_service.py` which maps VLM-returned confidence strings to floats. D-5 (confidence calibration policy) is **signed** (`docs/decisions/D5_decision_confidence_calibration.md` exists). However the confidence band mapping is per-field in the template, which is the right place — but only VLM-path facts get real confidence; non-VLM (chunk-only) facts carry no confidence |
 | T21 | Marathi and Devanagari OCR | ✅ Complete | `extractor.py` uses `TESSERACT_LANG = "eng+hin+mar"` and PaddleOCR with `lang="mr"`. Both paths are wired |
 | T22 | VLM extraction path | ✅ Complete | `pipeline/vlm_extraction.py` (728 lines); Gemini and OpenRouter VLM providers wired; template-driven field extraction; all four handlers invoked; `FactRegion` written per field |
 | T23 | Document classification stage + unclassified queue | ✅ Complete | `classification_service.py` with LLM-based template matching, `classify_document()`, `list_unclassified_documents()`, `manually_classify_document()`, `dismiss_document_classification()` |
@@ -60,7 +60,7 @@
 | T28 | Handler 3 — continuation-row merge | ✅ Complete | `handlers/continuation_merge.py`; blank-serial rows at page top merge backward; facts correctly get list of regions across two pages |
 | T29 | Handler 4 — blob-cell parse | ✅ Complete | `handlers/blob_cell_parser.py`; survey/CTS numbers, area unit normalisation (sqm, sqft, ha, are, guntha); "Akker" flagged for human rather than guessed |
 | T30 | Handwritten and degraded policy | ✅ Complete | `Fact.is_handwritten` column; `mark_fact_handwritten()` in verification service; `_marginalia` sentinel Facts written by VLM extraction; `bulk_confirm_facts` excludes `is_handwritten=True` rows unconditionally |
-| T31 | Regression corpus seeded from Waqf ground truth | ❌ Pending | `T31_T32_regression_corpus_notes.md` exists (planning doc). No actual sample documents with human-verified ground truth in codebase. Blocked on A1 |
+| T31 | Regression corpus seeded from Waqf ground truth | ❌ Pending | `docs/testing/T31_T32_regression_corpus_notes.md` exists (planning doc). No actual sample documents with human-verified ground truth in codebase. Blocked on A1 |
 | T32 | Accuracy baseline report | ❌ Pending | Same as T31 — no ground-truth corpus, no accuracy numbers. Blocked on A1 and D-4 (accuracy tolerance not yet agreed) |
 | T33 | Fix silent OCR failure (extraction_failed flag) | ✅ Complete | `extractor.py` lines 102, 139–142, 158: `failed = not text.strip()` correctly sets `extraction_failed=True` when OCR yields empty text. D-3 notes this was fixed in same commit as JWT fix |
 
@@ -131,8 +131,8 @@
 | T63 | Tamper-evident audit — append-only enforcement, hash chains, integrity checker | ✅ Complete | `audit_service.py` with sha-256 chained events per-tenant; advisory lock prevents chain forks; `verify_chain_integrity()` walks and recomputes; DB append-only enforcement via grants in migration `0020_audit_hash_chain.py`. Tested in `test_certificate.py` and `test_data_loss_audit.py` |
 | T64 | WORM archival storage with retention lock | 🟡 Partial | `storage_service.py` has `archive_file_with_retention()` using S3 Object Lock `COMPLIANCE` mode. Config has `s3_archive_bucket_name`. **Not wired into the ingest pipeline** — no call site in `document_service.py` or the Celery worker actually invokes `archive_file_with_retention()` during upload |
 | T65 | Section 63 certificate generation | 🟡 Partial | `certificate_service.py` generates a PDF with hash, algorithm, dual signature blocks. **Prominently marked DRAFT** — assumption A3 (legal counsel review) is still open. Certificate cannot be used as an evidentiary instrument until A3 closes |
-| T66 | Retention policy engine per record class | 🟡 Partial | `models/retention_class.py` and migration `0024_retention_classes.py` define the class schema. `D7_decision_retention_classes.md` is signed. **The purge engine itself is not built** — no background task actually acts on `retention_days` to purge records |
-| T67 | Verified-layer boundary enforced at query layer | ✅ Complete | `export_service.py` and `report_service.py` use `gather_evidence_package()` with `mode="certificate"` to exclude unconfirmed edges/facts, or `mode="general_export"` to include them with `confirmation_status` label. `D8_decision_escrowed_links_in_exports.md` signed. Enforced in the service layer, not per call site |
+| T66 | Retention policy engine per record class | 🟡 Partial | `models/retention_class.py` and migration `0024_retention_classes.py` define the class schema. `docs/decisions/D7_decision_retention_classes.md` is signed. **The purge engine itself is not built** — no background task actually acts on `retention_days` to purge records |
+| T67 | Verified-layer boundary enforced at query layer | ✅ Complete | `export_service.py` and `report_service.py` use `gather_evidence_package()` with `mode="certificate"` to exclude unconfirmed edges/facts, or `mode="general_export"` to include them with `confirmation_status` label. `docs/decisions/D8_decision_escrowed_links_in_exports.md` signed. Enforced in the service layer, not per call site |
 
 ---
 
@@ -150,12 +150,12 @@
 
 | Task | Title | Status | Evidence |
 |------|-------|--------|----------|
-| T81 | Licensing enforcement — SaaS subscription metering, on-prem capacity licence | 🟡 Partial | `license_service.py` (12 KB) with `PLAN_DEFINITIONS`, on-prem signed licence file verification. `T81_licensing_assumptions.md` exists. Gated on A5 (licensing model decision) — template/placeholder pending real sign-off |
+| T81 | Licensing enforcement — SaaS subscription metering, on-prem capacity licence | 🟡 Partial | `license_service.py` (12 KB) with `PLAN_DEFINITIONS`, on-prem signed licence file verification. `docs/decisions/T81_licensing_assumptions.md` exists. Gated on A5 (licensing model decision) — template/placeholder pending real sign-off |
 | T90 | Local model provider — Qwen2.5-VL-7B on 24 GB GPU | 🟡 Partial | `ai/providers/qwen_vlm_provider.py` exists (5 KB) — Qwen VLM wired. PaddleOCR wired for local OCR. BGE-M3 for local embeddings/reranking. **LLM has no local provider** — every LLM call goes to an external API. `airgapped.py` explicitly states "LLM and VLM have no local provider yet (T90, not built), so air-gapped mode fails closed on those." Gated on A2 (GPU availability) |
 | T91 | API-versus-local toggle that fails closed | ✅ Complete | `airgapped.py` with `enforce_local()` raises `AirGappedViolation` rather than silently falling back. `egress_guard.py` patches httpx transport to block known external AI hosts when `air_gapped=True` |
 | T92 | Egress-zero verification script and CI coverage | 🟡 Partial | `test_egress_guard.py` and `test_air_gapped_toggle.py` exist. **CI egress monitoring** (the "CI job asserts zero outbound connections" from the build design) is not confirmed — tests mock the network rather than running with real network blocked |
 | T93 | Helm charts and air-gapped install runbook | 🟡 Partial | `helm/veritasdocs/` directory exists. **Runbook not confirmed complete** — backlog exit criterion ("someone who did not build it installs from the runbook") has not been executed |
-| T94 | Project / Collection container level | ✅ Complete | Closed by decision D-1 (signed 2026-08-24). `T94_closure_note.md` documents the resolution — department-scoped RBAC over the existing folder tree satisfies the requirement without a new container abstraction |
+| T94 | Project / Collection container level | ✅ Complete | Closed by decision D-1 (signed 2026-08-24). `docs/decisions/T94_closure_note.md` documents the resolution — department-scoped RBAC over the existing folder tree satisfies the requirement without a new container abstraction |
 | T97 | Performance pass on real corpus volumes | ❌ Pending | No evidence in codebase |
 
 ---
@@ -168,10 +168,10 @@
 | D-2 | SaaS tenant isolation ratification | ❌ Pending — security review not confirmed done |
 | D-3 | JWT access-token lifetime | ✅ Signed 2026-08-25 — 15 min access / 7-day refresh |
 | D-4 | M1 accuracy tolerance numbers | ❌ Pending — no ground truth corpus yet |
-| D-5 | Confidence calibration policy | ✅ Signed — `D5_decision_confidence_calibration.md` exists |
+| D-5 | Confidence calibration policy | ✅ Signed — `docs/decisions/D5_decision_confidence_calibration.md` exists |
 | D-6 | Surya GPL inclusion decision | ❌ Pending — legal hasn't signed off |
-| D-7 | Retention classes and defaults | ✅ Signed — `D7_decision_retention_classes.md` exists |
-| D-8 | Escrowed links in evidence exports | ✅ Signed — `D8_decision_escrowed_links_in_exports.md` exists |
+| D-7 | Retention classes and defaults | ✅ Signed — `docs/decisions/D7_decision_retention_classes.md` exists |
+| D-8 | Escrowed links in evidence exports | ✅ Signed — `docs/decisions/D8_decision_escrowed_links_in_exports.md` exists |
 | D-9 | Scope of built drive product | ❌ Pending — not formally documented |
 
 ---

@@ -42,7 +42,7 @@ the highest-priority engineering work in the whole product.
   Two real documents with hand-made ground truth exist, documented as a start, explicitly not as closure.
 
 - [ ] **T32** — Accuracy baseline report — **blocked on A1, D-4**
-  `accuracy_baseline.py` runs against real extracted data; `D4_accuracy_data_summary.md` supplies real numbers. The tolerance decision itself (D-4) is Product's call and is unmade.
+  `accuracy_baseline.py` runs against real extracted data; `docs/decisions/D4_accuracy_data_summary.md` supplies real numbers. The tolerance decision itself (D-4) is Product's call and is unmade.
 
 - [x] **T33** — Fix silent OCR failure
   Evidence: `backend/app/ocr/extractor.py:102,139-142,158`.

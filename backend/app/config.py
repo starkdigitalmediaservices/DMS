@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     air_gapped: bool = False
 
     # T81 — licensing enforcement. Placeholder business model pending real
-    # sign-off (A5) — see T81_licensing_assumptions.md. deployment_mode picks
+    # sign-off (A5) — see docs/decisions/T81_licensing_assumptions.md. deployment_mode picks
     # which enforcement mechanism applies: 'saas' meters usage against a
     # subscription plan (app/services/license_service.py:PLAN_DEFINITIONS);
     # 'on_prem' verifies a signed capacity license file instead, since an

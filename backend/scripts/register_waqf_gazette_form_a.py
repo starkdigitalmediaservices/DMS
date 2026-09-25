@@ -29,7 +29,7 @@ Consolidated Abstract page) will still only get their first 8 columns
 extracted correctly against this template; their columns 9-19 (property
 detail on the continuation page) are not captured by this pass. Flagged
 here rather than guessed at, matching this project's established
-practice for structural gaps (see T31_T32_regression_corpus_notes.md).
+practice for structural gaps (see docs/testing/T31_T32_regression_corpus_notes.md).
 
 Usage (inside the backend container):
     python3 scripts/register_waqf_gazette_form_a.py

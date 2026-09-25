@@ -1,4 +1,4 @@
-"""T31/T32 follow-up (see T31_T32_regression_corpus_notes.md): a real 1973
+"""T31/T32 follow-up (see docs/testing/T31_T32_regression_corpus_notes.md): a real 1973
 gazette's dense left-hand page returned malformed JSON on 3 separate live
 attempts, at a different position each time -- model flakiness, not a
 parsing bug. _call_vlm_with_parse_retry() retries the VLM call itself

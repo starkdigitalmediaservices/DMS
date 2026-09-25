@@ -3,7 +3,7 @@
 Status: **signed — 2026-08-24**
 Blocks (now unblocked): T10 (entity graph schema), T50 (RBAC for six personas), T94, and everything that cascades from them (T56–T59, T60–T62 records, and indirectly Governance/Export/Reports once their own gates — D-7, D-8, A3 — are separately resolved)
 Owner: signed off by the project decision-maker on 2026-08-24
-Reference: Build Design v0.3 §3.10; Scope Gap §12 item 3; backlog.txt T10 editorial note ("Settle decision D-1 first")
+Reference: Build Design v0.3 §3.10; Scope Gap §12 item 3; docs/planning/backlog.txt T10 editorial note ("Settle decision D-1 first")
 
 ---
 

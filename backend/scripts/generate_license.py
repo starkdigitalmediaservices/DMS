@@ -6,7 +6,7 @@ not something a customer runs) and hand the customer only the resulting
 .lic file. Never ship this script's private key inside the product image.
 
 DEV-ONLY private key below, matching the public key hardcoded in
-app/services/license_service.py — see T81_licensing_assumptions.md. Before
+app/services/license_service.py — see docs/decisions/T81_licensing_assumptions.md. Before
 any real deployment, generate a fresh keypair (this script's __main__
 block shows how) and keep the private half in a secrets vault, never in
 version control.

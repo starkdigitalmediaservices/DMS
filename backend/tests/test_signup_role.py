@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import delete, select
 
 from app.database import AsyncSessionLocal
+from app.models.role import Role
 from app.models.subscription import Subscription
 from app.models.tenant import Tenant
 from app.models.user import User, UserRole
@@ -39,8 +40,15 @@ async def test_sign_up_grants_it_admin_not_the_legacy_admin_role():
             created = (await db.execute(select(User).where(User.id == resp.user_id))).scalar_one()
             assert created.role == UserRole.it_admin
             assert created.role != UserRole.admin
+            # R5: the organisation starts with exactly one role, the locked
+            # Admin, and the founding user holds it.
+            roles = (await db.execute(select(Role).where(Role.tenant_id == resp.tenant_id))).scalars().all()
+            assert len(roles) == 1
+            assert roles[0].name == "Admin" and roles[0].is_system and roles[0].all_departments
+            assert created.role_id == roles[0].id
         finally:
             await db.execute(delete(User).where(User.id == resp.user_id))
+            await db.execute(delete(Role).where(Role.tenant_id == resp.tenant_id))
             await db.execute(delete(Subscription).where(Subscription.tenant_id == resp.tenant_id))
             await db.execute(delete(Tenant).where(Tenant.id == resp.tenant_id))
             await db.commit()

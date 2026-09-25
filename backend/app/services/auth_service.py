@@ -7,6 +7,7 @@ from sqlalchemy import select, text
 from app.config import settings
 from app.database import establish_tenant_context  # noqa: F401 — re-exported; app/api/v1/auth.py imports it from here
 from app.schemas.auth import TokenPayload, SignUpRequest, SignUpResponse
+from app.models.role import Role
 from app.models.user import User, UserRole
 from app.models.tenant import Tenant
 from app.services.license_service import get_or_create_subscription
@@ -57,6 +58,13 @@ async def sign_up(body: SignUpRequest, db: AsyncSession) -> SignUpResponse:
     # billing_dg_subscription insert the instant that table got a policy).
     await establish_tenant_context(db, tenant.id)
 
+    # Custom roles (R5): a new organisation starts clean -- exactly one
+    # role, the locked Admin (holds every permission, sees every
+    # department). No departments, no other roles, no templates copied.
+    admin_role = Role(tenant_id=tenant.id, name="Admin", is_system=True, all_departments=True, permissions=[])
+    db.add(admin_role)
+    await db.flush()
+
     # Create user
     user = User(
         email=body.email,
@@ -77,6 +85,7 @@ async def sign_up(body: SignUpRequest, db: AsyncSession) -> SignUpResponse:
         # UI exists). Found live: a fresh signup showed "This action
         # requires one of: it_admin" on its own Admin Panel.
         role=UserRole.it_admin,
+        role_id=admin_role.id,
     )
     db.add(user)
     await get_or_create_subscription(db, tenant.id)  # T81 — every tenant starts on a trial

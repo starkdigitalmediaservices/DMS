@@ -1,6 +1,6 @@
 import { getAccessToken, getUserProfile, setUserProfile, clearTokens } from "./auth";
 import { offlineStore } from "./offlineStore";
-import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, SearchResult, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem, AdminUser, CreatedAdminUser, Department, ReviewDocument, ReviewDocumentSummary, ReviewHistoryEntry } from "@/types";
+import type { Folder, FolderTreeNode, DocumentListItem, DocumentDetailResponse, DocumentFactsResponse, DocumentTableViewResponse, DriveStats, SearchResponse, SearchResult, ChatSession, ChatMessage, ChatSessionListItem, TemplateResponse, TemplateCreatePayload, SysConfigItem, AdminUser, CreatedAdminUser, AdminRole, PermissionGroup, RoleTemplate, Department, ReviewDocument, ReviewDocumentSummary, ReviewHistoryEntry } from "@/types";
 
 // An HTTP error response from the backend (as opposed to a network-level
 // failure, which is a plain Error). Carries the status so callers can tell
@@ -837,23 +837,55 @@ export const api = {
       });
     },
   },
-  // IT-admin user & role management. Server enforces it_admin on all of these.
+  // User management. The server checks users.manage (folder sharing:
+  // departments.manage) on every call.
   users: {
     list: async (): Promise<AdminUser[]> => {
       return await request("/api/v1/users", { method: "GET" });
     },
     // Response carries a one-time temp_password — never persisted client-side.
-    create: async (body: { email: string; full_name: string; role: string }): Promise<CreatedAdminUser> => {
+    create: async (body: { email: string; full_name: string; role_id: string }): Promise<CreatedAdminUser> => {
       return await request("/api/v1/users", {
         method: "POST",
         body: JSON.stringify(body),
       });
     },
-    update: async (userId: string, body: { role?: string; full_name?: string }): Promise<AdminUser> => {
+    update: async (userId: string, body: { role_id?: string; full_name?: string }): Promise<AdminUser> => {
       return await request(`/api/v1/users/${userId}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       });
+    },
+    // A folder shared with one user directly, not through a department.
+    shareFolder: async (userId: string, folderId: string): Promise<any> => {
+      return await request(`/api/v1/users/${userId}/folders`, {
+        method: "POST",
+        body: JSON.stringify({ folder_id: folderId }),
+      });
+    },
+    unshareFolder: async (userId: string, folderId: string): Promise<null> => {
+      return await request(`/api/v1/users/${userId}/folders/${folderId}`, { method: "DELETE" });
+    },
+  },
+  // Custom roles. Reading needs roles.manage or users.manage; changing needs roles.manage.
+  roles: {
+    list: async (): Promise<AdminRole[]> => {
+      return await request("/api/v1/roles", { method: "GET" });
+    },
+    permissions: async (): Promise<PermissionGroup[]> => {
+      return await request("/api/v1/roles/permissions", { method: "GET" });
+    },
+    templates: async (): Promise<RoleTemplate[]> => {
+      return await request("/api/v1/roles/templates", { method: "GET" });
+    },
+    create: async (body: { name: string; permissions: string[]; all_departments: boolean }): Promise<AdminRole> => {
+      return await request("/api/v1/roles", { method: "POST", body: JSON.stringify(body) });
+    },
+    update: async (roleId: string, body: { name?: string; permissions?: string[]; all_departments?: boolean }): Promise<AdminRole> => {
+      return await request(`/api/v1/roles/${roleId}`, { method: "PATCH", body: JSON.stringify(body) });
+    },
+    delete: async (roleId: string): Promise<null> => {
+      return await request(`/api/v1/roles/${roleId}`, { method: "DELETE" });
     },
   },
   departments: {

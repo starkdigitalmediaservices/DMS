@@ -94,7 +94,7 @@ async def search_stream(
         # fail-closed policies from migration 0053 would hide every document.
         async with AppSessionLocal() as db:
             await set_request_gucs(db, {"app.current_tenant_id": str(tenant_id)})
-            await department_service.apply_request_scope(db, tenant_id, user_id, current_user.role)
+            await department_service.apply_request_scope(db, tenant_id, user_id, current_user)
             try:
                 async for chunk in _run(db):
                     yield chunk

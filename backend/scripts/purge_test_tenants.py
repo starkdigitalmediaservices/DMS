@@ -60,6 +60,7 @@ TENANT_SCOPED_TABLES_CHILD_FIRST = [
     "doc_dg_folders",
     "iam_dg_department_folders",
     "iam_dg_department_members",
+    "iam_dg_user_folders",
     "iam_dg_departments",
     "sys_dg_corpus_calibration",
     "sys_dg_retention_classes",
@@ -67,6 +68,7 @@ TENANT_SCOPED_TABLES_CHILD_FIRST = [
     "audit_dg_api_logs",
     # audit_dg_logs deliberately absent: append-only by DB trigger.
     "iam_dg_users",
+    "iam_dg_roles",  # after users: users.role_id points here
 ]
 
 

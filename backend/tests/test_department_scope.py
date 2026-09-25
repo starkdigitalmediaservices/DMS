@@ -271,7 +271,7 @@ async def test_last_it_admin_cannot_be_demoted(world):
         await set_request_gucs(db, {"app.current_tenant_id": str(w["tenant"])})
         with pytest.raises(HTTPException) as exc:
             await user_admin_service.update_user(db, w["tenant"], w["admin2"], w["admin"], role="operator")
-        assert exc.value.status_code == 400 and "last IT admin" in exc.value.detail
+        assert exc.value.status_code == 400 and "last Admin" in exc.value.detail
 
 
 @pytest.mark.asyncio

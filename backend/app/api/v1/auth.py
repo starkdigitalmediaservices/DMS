@@ -23,6 +23,7 @@ from ...services.auth_service import (
     lookup_user_by_email, establish_tenant_context,
 )
 from ...services.audit_service import log_action
+from ...permissions import PERMISSION_KEYS
 
 router = APIRouter()
 
@@ -115,7 +116,14 @@ async def get_current_user_profile(
         total_folders=total_folders,
         total_size_bytes=total_size_bytes,
         total_chunks=total_chunks,
-        file_types_breakdown=file_types
+        file_types_breakdown=file_types,
+        role_id=current_user.role_id,
+        role_name=current_user.role_name,
+        is_admin=current_user.is_admin,
+        all_departments=current_user.all_departments,
+        # Admin's list is stored empty (it holds everything implicitly);
+        # spell it out so the UI needs no special case.
+        permissions=sorted(PERMISSION_KEYS) if current_user.is_admin else sorted(current_user.permissions),
     )
 
 @router.patch('/me/locale', response_model=UpdateLocaleResponse)

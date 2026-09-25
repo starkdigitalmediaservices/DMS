@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...schemas.auth import TokenPayload
-from ...deps import get_tenant_db, require_tenant_access, require_role
+from ...deps import get_tenant_db, require_tenant_access, require_permission
 from ...services import fact_service, fact_verification_service
 
 router = APIRouter(prefix="/facts", tags=["Facts"])
@@ -45,7 +45,7 @@ async def bulk_confirm_facts_api(
     corpus_folder_id: uuid.UUID,
     threshold: float,
     policy_version: str,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("facts.review")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -63,7 +63,7 @@ async def bulk_confirm_facts_api(
 @router.post("/bulk-edit")
 async def bulk_edit_facts_api(
     body: BulkEditRequest,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("facts.review")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -77,7 +77,7 @@ async def bulk_edit_facts_api(
 @router.post("/bulk-edit/revert/{batch_id}")
 async def revert_bulk_edit_batch_api(
     batch_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("facts.review")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -98,7 +98,7 @@ async def get_fact_api(
 @router.post("/{fact_id}/claim")
 async def claim_fact_api(
     fact_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("facts.review")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -110,7 +110,7 @@ async def claim_fact_api(
 @router.post("/{fact_id}/release")
 async def release_fact_api(
     fact_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("facts.review")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -122,7 +122,7 @@ async def release_fact_api(
 @router.post("/{fact_id}/mark-handwritten")
 async def mark_fact_handwritten_api(
     fact_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("facts.review")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -135,7 +135,7 @@ async def mark_fact_handwritten_api(
 async def resolve_stitch_ambiguity_api(
     fact_id: uuid.UUID,
     body: ResolveStitchAmbiguityRequest,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("facts.review")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -148,7 +148,7 @@ async def resolve_stitch_ambiguity_api(
 async def confirm_fact_api(
     fact_id: uuid.UUID,
     expected_version: Optional[int] = None,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("facts.review")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)

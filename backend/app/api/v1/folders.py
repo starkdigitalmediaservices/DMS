@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 import uuid
 
-from app.deps import get_tenant_db, require_tenant_access, require_role
+from app.deps import get_tenant_db, require_tenant_access, require_permission
 from app.schemas.auth import TokenPayload
 from app.schemas.folder import FolderCreate, FolderUpdate, FolderResponse, FolderTreeNode
 from app.services import folder_service
@@ -104,7 +104,7 @@ async def toggle_trash_folder(
 @router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_folder_permanently(
     folder_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'department_head', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("content.deletePermanent")),
     db: AsyncSession = Depends(get_tenant_db)
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)

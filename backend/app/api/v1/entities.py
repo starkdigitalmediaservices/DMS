@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...schemas.auth import TokenPayload
-from ...deps import get_tenant_db, require_tenant_access, require_role
+from ...deps import get_tenant_db, require_tenant_access, require_permission
 from ...services import entity_360_service, entity_graph_service
 
 router = APIRouter(prefix="/entities", tags=["Entities"])
@@ -31,7 +31,7 @@ class EntityEdgeCreate(BaseModel):
 @router.post("", status_code=201)
 async def create_entity_node_api(
     node_in: EntityNodeCreate,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("entities.edit")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -71,7 +71,7 @@ async def check_entity_duplicate_api(
 @router.post("/edges", status_code=201)
 async def create_entity_edge_api(
     edge_in: EntityEdgeCreate,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("entities.edit")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     """T56 — the create-edge half of the API. create_node, confirm/revert
@@ -108,7 +108,7 @@ async def create_entity_edge_api(
 @router.delete("/edges/{edge_id}", status_code=204)
 async def delete_entity_edge_api(
     edge_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("entities.edit")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -119,7 +119,7 @@ async def delete_entity_edge_api(
 @router.delete("/{node_id}", status_code=204)
 async def delete_entity_node_api(
     node_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("entities.edit")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -151,7 +151,7 @@ async def get_entity_360_api(
 @router.post("/edges/{edge_id}/confirm")
 async def confirm_edge_api(
     edge_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("entities.edit")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -163,7 +163,7 @@ async def confirm_edge_api(
 @router.post("/edges/{edge_id}/revert")
 async def revert_edge_api(
     edge_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("entities.edit")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -177,7 +177,7 @@ async def bulk_confirm_edges_api(
     corpus_folder_id: uuid.UUID,
     threshold: float,
     policy_version: str,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("entities.edit")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -195,7 +195,7 @@ async def bulk_confirm_edges_api(
 @router.post("/edges/bulk-revert/{batch_id}")
 async def revert_bulk_edge_batch_api(
     batch_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("entities.edit")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)

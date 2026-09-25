@@ -11,18 +11,19 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...deps import get_tenant_db, require_role
+from ...deps import get_tenant_db, require_permission
 from ...schemas.auth import TokenPayload
 from ...services import review_service as rs
+from ...services.audit_service import log_action
 
 router = APIRouter(prefix="/documents/{document_id}/review", tags=["Review"])
 # Workbench "Documents" tab: every document with something to review.
 list_router = APIRouter(prefix="/review", tags=["Review"])
 
-_read = require_role(*rs.READ_ROLES)
-_edit = require_role(*rs.EDIT_ROLES)
-_verify = require_role(*rs.VERIFY_ROLES)
-_revert_all = require_role(*rs.REVERT_ALL_ROLES)
+_read = require_permission(rs.READ_PERMISSION)
+_edit = require_permission(rs.EDIT_PERMISSION)
+_verify = require_permission(rs.VERIFY_PERMISSION)
+_revert_all = require_permission(rs.REVERT_ALL_PERMISSION)
 
 
 def _if_match(value: Optional[str]) -> Optional[int]:
@@ -36,7 +37,8 @@ def _if_match(value: Optional[str]) -> Optional[int]:
 
 
 def _ctx(user: TokenPayload):
-    return uuid.UUID(user.tenant_id), uuid.UUID(user.sub), user.role
+    # Pass the whole live access, not the persona string: rs checks keys.
+    return uuid.UUID(user.tenant_id), uuid.UUID(user.sub), user
 
 
 def _respond(response: Response, doc: dict) -> JSONResponse:
@@ -82,8 +84,11 @@ class VerifyRequest(BaseModel):
 @router.get("")
 async def get_review(document_id: uuid.UUID, response: Response,
                      user: TokenPayload = Depends(_read), db: AsyncSession = Depends(get_tenant_db)):
-    tenant_id, _, role = _ctx(user)
-    return _respond(response, await rs.get_review_document(db, tenant_id, document_id, role))
+    tenant_id, actor, role = _ctx(user)
+    doc = await rs.get_review_document(db, tenant_id, document_id, role)
+    # R16 / decision D4: viewing stays open to every role, so it is audited.
+    await log_action(db, actor, tenant_id, "review.open", resource_type="document", resource_id=document_id)
+    return _respond(response, doc)
 
 
 @router.get("/pages/{page_number}/image")

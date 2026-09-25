@@ -251,7 +251,7 @@ export interface SysConfigItem {
 }
 
 
-// IT-admin user & role management (GET/POST/PATCH /api/v1/users).
+// User & role management (GET/POST/PATCH /api/v1/users, /api/v1/roles).
 export interface AdminUserDepartment {
   id: string;
   name: string;
@@ -261,9 +261,39 @@ export interface AdminUser {
   id: string;
   email: string;
   full_name: string;
+  /** Legacy persona; kept until custom roles fully replace it (R13). */
   role: string;
+  role_id: string | null;
+  role_name: string | null;
+  is_admin: boolean;
   created_at: string;
   departments: AdminUserDepartment[];
+  /** Folders shared with this user directly, not via a department. */
+  folders: DepartmentFolderGrant[];
+}
+
+/** A tenant role (custom roles). The Admin role (is_system) is locked. */
+export interface AdminRole {
+  id: string;
+  name: string;
+  is_system: boolean;
+  all_departments: boolean;
+  permissions: string[];
+  user_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PermissionGroup {
+  group: string;
+  permissions: { key: string; label: string }[];
+}
+
+export interface RoleTemplate {
+  key: string;
+  name: string;
+  all_departments: boolean;
+  permissions: string[];
 }
 
 // POST /users only — temp_password is shown to the admin once and never stored.
@@ -276,6 +306,7 @@ export interface DepartmentMember {
   email: string;
   full_name: string;
   role: string;
+  role_name?: string | null;
 }
 
 export interface DepartmentFolderGrant {

@@ -1,3 +1,4 @@
+from typing import List, Optional
 from pydantic import BaseModel, EmailStr, Field
 from uuid import UUID
 
@@ -36,6 +37,14 @@ class TokenPayload(BaseModel):
     exp: int
     jti: str  # JWT ID for refresh token tracking
     type: str = "access"
+    # Custom roles (docs/features/custom-roles/). Never read from the token:
+    # deps.get_current_user fills these from the database on every request.
+    # Defaults mean "no role" -- which is denied everything role-gated.
+    role_id: Optional[str] = None
+    role_name: Optional[str] = None
+    is_admin: bool = False
+    all_departments: bool = False
+    permissions: List[str] = []
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -75,6 +84,13 @@ class UserProfileResponse(BaseModel):
     total_size_bytes: int
     total_chunks: int
     file_types_breakdown: list[FileTypeCount]
+    # Custom roles (R8): what the UI shows or hides. Filled from the live
+    # role on every call; the server still enforces every action itself.
+    role_id: Optional[str] = None
+    role_name: Optional[str] = None
+    is_admin: bool = False
+    all_departments: bool = False
+    permissions: List[str] = []
 
 
 class UpdateLocaleRequest(BaseModel):

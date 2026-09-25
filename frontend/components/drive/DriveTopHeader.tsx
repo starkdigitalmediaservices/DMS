@@ -42,9 +42,13 @@ export function DriveTopHeader({
   const [userName, setUserName] = useState<string>("User");
   const [userEmail, setUserEmail] = useState<string>("");
   const [userInitials, setUserInitials] = useState<string>("U");
-  const { role, can: roleCan } = useRole();
+  const { role, roleName, can: roleCan } = useRole();
+  // Custom roles are named by the admin, so show the name as given; only an
+  // old persona string (no role_name yet) goes through translation.
   const displayedRole = displayRole(role);
-  const roleText = displayedRole ? t(`role.${displayedRole}`, roleLabel(role)) : roleLabel(role);
+  const roleText = roleName && roleName !== roleLabel(role)
+    ? roleName
+    : displayedRole ? t(`role.${displayedRole}`, roleLabel(role)) : roleLabel(role);
 
   React.useEffect(() => {
     api.auth.getProfile()
@@ -283,6 +287,16 @@ export function DriveTopHeader({
                   >
                     <UserCog className="w-4 h-4 text-primary" />
                     <span>{t("header.users_roles", "Users & Roles")}</span>
+                  </Link>
+                  )}
+                  {roleCan("roles.manage") && (
+                  <Link
+                    href="/admin/roles"
+                    onClick={() => setDropdownOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2 text-sm text-textMain hover:bg-white/5 transition-colors font-medium"
+                  >
+                    <ShieldCheck className="w-4 h-4 text-primary" />
+                    <span>{t("header.roles", "Roles")}</span>
                   </Link>
                   )}
                   {roleCan("departments.manage") && (

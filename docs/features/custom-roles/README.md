@@ -35,7 +35,7 @@ hard-coded role list (`TENANT_WIDE_ROLES`) and becomes the role's
 4. **Permissions are a fixed list in code.** Admin ticks from it; admin cannot invent new ones (a permission means nothing unless code checks it).
 5. **Admin role is locked**: cannot be edited, renamed or deleted; the tenant's last Admin user cannot be removed, deactivated or moved to another role.
 6. **No privilege escalation**: a non-Admin with `users.manage` may only assign roles whose permissions are a subset of their own; only an Admin may assign the Admin role or grant `all_departments`.
-7. **Check permissions live** — read the role from the DB each request. Do not trust the `role` claim in the JWT (it lives up to 15 min after a change).
+7. **Check permissions live** — already the pattern: `get_current_user` (`backend/app/deps.py`) re-reads the user's role from the DB on every request (`load_live_role`) and overwrites the JWT claim. Extend that same lookup; never read permissions from the token.
 8. **Every existing user keeps exactly the access they have today** after the migration (backfill maps each old persona onto an equal role).
 9. Impact first: before editing, list call sites/tests a change touches; if something surprises you, stop and ask.
 
@@ -69,3 +69,21 @@ Frontend http://localhost:3000 · API docs http://localhost:8000/api/docs
 3. Before coding: re-check the file:line refs in that task (code moves); report the impact; start.
 4. Finish = the task's **Done when** list passes. Tick subtasks `[x]`, set status `done`.
 5. **Update "Where we left off"** at the end of every session — what is done, what is half-done (with file names), what is next. This is the only hand-over channel.
+
+## Starter prompt (paste into Claude Code, repo root)
+
+```
+We're continuing the "custom roles" feature in this repo. Read
+docs/features/custom-roles/README.md and then TASKS.md. The block
+"Where we left off" at the top of TASKS.md is the current state.
+
+Rules: ask me before any git write (commit, push, branch, checkout).
+Never edit an existing migration; add a new one. Before editing, tell me
+what the task touches (files, tests, other screens) and wait for my OK.
+
+Start by: (1) summarising in 5 lines where things stand, (2) running
+`docker compose exec -T backend alembic upgrade head` and the custom-roles
+tests (tests/test_roles_*.py, tests/test_users_roles_api.py), (3) telling
+me which open task you'd pick next and why. At the end of the session,
+update the "Where we left off" block.
+```

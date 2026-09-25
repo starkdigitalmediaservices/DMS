@@ -4,7 +4,7 @@ from sqlalchemy import ForeignKey, Enum, UniqueConstraint
 from datetime import datetime
 import uuid
 import enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from app.database import Base
 
@@ -36,6 +36,10 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(default="")
     hashed_password: Mapped[str] = mapped_column("password_hash")
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), default=UserRole.operator)
+    # Custom roles (migration 0056). Replaces `role` once the gates move
+    # over (TASKS.md R3); nullable until R13, and a user with no role is
+    # denied everything role-gated.
+    role_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("iam_dg_roles.id"), nullable=True, index=True)
     locale: Mapped[str] = mapped_column(default="en")  # T95 — 'en' or 'mr'
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 

@@ -6,6 +6,7 @@ from .database import AsyncSessionLocal, AppSessionLocal, get_db, set_request_gu
 from .services.auth_service import verify_token
 from .services import department_service
 from .schemas.auth import TokenPayload
+from .permissions import check_key, legacy_access, role_grants
 
 bearer_scheme = HTTPBearer()
 
@@ -19,8 +20,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(b
     payload = verify_token(credentials.credentials)
     if payload.type != "access":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
-    live_role = await load_live_role(payload.sub, payload.tenant_id)
-    if live_role is None:
+    live = await load_live_access(payload.sub, payload.tenant_id)
+    if live is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User no longer exists",
@@ -29,7 +30,46 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(b
     # The role claim is only a snapshot from login; every permission check
     # below uses the role as it is now, so a demotion takes effect on the
     # next request instead of whenever the token chain happens to end.
-    return payload.model_copy(update={"role": live_role})
+    return payload.model_copy(update=live)
+
+
+async def load_live_access(user_id: str, tenant_id: str) -> dict | None:
+    """The caller's role as it is right now: the legacy persona string plus
+    the custom role (migration 0056) it points at. None if the user is gone.
+    One query, same session pattern as load_live_role. A user with no
+    role_id yet gets their old persona's access (permissions.legacy_access)
+    until R13 makes role_id mandatory."""
+    async with AppSessionLocal() as session:
+        try:
+            await session.execute(
+                text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": str(tenant_id)}
+            )
+            res = await session.execute(
+                text(
+                    "SELECT u.role::text, r.id::text, r.name, r.is_system, r.all_departments, r.permissions "
+                    "FROM iam_dg_users u LEFT JOIN iam_dg_roles r "
+                    "  ON r.id = u.role_id AND r.tenant_id = u.tenant_id "
+                    "WHERE u.id = CAST(:u AS uuid) AND u.tenant_id = CAST(:t AS uuid)"
+                ),
+                {"u": str(user_id), "t": str(tenant_id)},
+            )
+            row = res.first()
+        finally:
+            await _reset_session_tenant_context(session)
+    if row is None:
+        return None
+    role, role_id, role_name, is_system, all_departments, perms = row
+    if role_id is None:
+        # No custom role yet: the old persona's exact access (see legacy_access).
+        is_system, all_departments, perms, role_name = legacy_access(role)
+    return {
+        "role": role,
+        "role_id": role_id,
+        "role_name": role_name,
+        "is_admin": bool(is_system),
+        "all_departments": bool(all_departments),
+        "permissions": list(perms or []),
+    }
 
 
 async def load_live_role(user_id: str, tenant_id: str) -> str | None:
@@ -67,6 +107,22 @@ def require_role(*allowed_roles: str):
         return current_user
     return _check
 
+def require_permission(key: str):
+    """Custom-roles gate, e.g. Depends(require_permission("facts.review")).
+    Replaces require_role (TASKS.md R3). The key is checked against the
+    catalogue when the route module loads, so a typo fails at startup
+    rather than silently denying everyone."""
+    check_key(key)
+
+    async def _check(current_user: TokenPayload = Depends(require_tenant_access)) -> TokenPayload:
+        if not role_grants(current_user.is_admin, current_user.permissions, key):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Your role does not allow this action ({key})",
+            )
+        return current_user
+    return _check
+
 async def get_tenant_db(
     current_user: TokenPayload = Depends(require_tenant_access),
 ):
@@ -86,7 +142,7 @@ async def get_tenant_db(
             # under tenant context only, then applied for the rest of the
             # request, including after any mid-request commit.
             await department_service.apply_request_scope(
-                session, uuid.UUID(current_user.tenant_id), uuid.UUID(current_user.sub), current_user.role
+                session, uuid.UUID(current_user.tenant_id), uuid.UUID(current_user.sub), current_user
             )
             yield session
             await session.commit()

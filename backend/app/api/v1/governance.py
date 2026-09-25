@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...deps import get_tenant_db, require_tenant_access, require_role
+from ...deps import get_tenant_db, require_tenant_access, require_permission
 from ...schemas.auth import TokenPayload
 from ...services.audit_service import verify_chain_integrity
 from ...services import completeness_service, certificate_service, corpus_calibration_service
@@ -30,7 +30,7 @@ class CorpusCalibrationRequest(BaseModel):
 
 @router.get("/audit-integrity")
 async def check_audit_integrity_api(
-    current_user: TokenPayload = Depends(require_role("auditor", "it_admin")),
+    current_user: TokenPayload = Depends(require_permission("audit.integrity")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     """T50 + T63 — the integrity checker exposed as an endpoint, restricted
@@ -42,9 +42,7 @@ async def check_audit_integrity_api(
 @router.get("/certificate/{document_id}")
 async def get_section63_certificate_api(
     document_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role(
-        "records_officer", "legal_counsel", "department_head", "it_admin", "auditor"
-    )),
+    current_user: TokenPayload = Depends(require_permission("certificate.section63")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     """T65 — Section 63 certificate: hash value, algorithm name, dual
@@ -80,7 +78,7 @@ async def get_corpus_completeness_api(
 async def calibrate_corpus_api(
     corpus_folder_id: uuid.UUID,
     body: CorpusCalibrationRequest,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("corpus.calibrate")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     """T59 — certify a corpus's confidence scores as human-validated,

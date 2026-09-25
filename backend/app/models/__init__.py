@@ -20,7 +20,8 @@ from app.models.entity_edge import EntityEdge
 from app.models.record import Record
 from app.models.record_amendment import RecordAmendment
 from app.models.corpus_calibration import CorpusCalibration
-from app.models.department import Department, DepartmentMember, DepartmentFolder
+from app.models.department import Department, DepartmentMember, DepartmentFolder, UserFolder
+from app.models.role import Role
 from app.models.retention_class import RetentionClass
 from app.models.translation import Translation
 from app.models.subscription import Subscription
@@ -43,7 +44,7 @@ __all__ = [
     "Chunk", "MetadataItem", "MetadataItemRegion", "AuditLog", "ChatSession", "ChatMessage",
     "ApiLog", "SysConfig", "DocumentPage", "Fact", "FactRegion", "Template",
     "EntityNode", "EntityEdge", "Record", "RecordAmendment", "CorpusCalibration",
-    "Department", "DepartmentMember", "DepartmentFolder", "RetentionClass",
+    "Department", "DepartmentMember", "DepartmentFolder", "UserFolder", "Role", "RetentionClass",
     "Translation", "Subscription", "License", "TableShapeDecision",
     "OCRArchive", "VLMArchive", "FieldTrustSignal", "SearchGlossaryTerm",
     "ReviewOriginal", "ReviewState", "ReviewAuditEntry", "Base",

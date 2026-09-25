@@ -10,7 +10,7 @@ from ...schemas.document import (
     DriveStatsResponse,
 )
 from ...schemas.auth import TokenPayload
-from ...deps import get_tenant_db, require_tenant_access, require_role
+from ...deps import get_tenant_db, require_tenant_access, require_permission
 from ...services import document_service, classification_service, duplicate_service, fact_service
 import uuid
 
@@ -77,7 +77,7 @@ async def list_unclassified_documents_api(
 async def classify_document_api(
     document_id: uuid.UUID,
     template_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("documents.classify")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -89,7 +89,7 @@ async def classify_document_api(
 @router.post('/{document_id}/dismiss-classification')
 async def dismiss_document_classification_api(
     document_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("documents.classify")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -212,7 +212,7 @@ async def cleanup_trashed_items_api(
     retention_days: int = 30,
     # Emptying the bin is a permanent delete, so it takes the same roles
     # as DELETE /documents/{id}; it was open to every role until 2026-09-23.
-    current_user: TokenPayload = Depends(require_role('records_officer', 'department_head', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("content.deletePermanent")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     # A single tenant's "Empty Bin" must never touch another tenant's
@@ -226,7 +226,7 @@ async def cleanup_trashed_items_api(
 @router.delete('/{document_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document_api(
     document_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'department_head', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("content.deletePermanent")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)

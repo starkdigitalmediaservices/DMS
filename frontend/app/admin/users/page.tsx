@@ -12,12 +12,32 @@ import {
   KeyRound,
   X,
   Building2,
+  ShieldCheck,
+  Folder as FolderIcon,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { useRole, ROLES, ROLE_LABELS, roleLabel, displayRole } from "@/lib/permissions";
+import { useRole, roleLabel } from "@/lib/permissions";
 import { Button } from "@/components/ui/Button";
 import { NoAccess } from "@/components/common/NoAccess";
-import type { AdminUser, CreatedAdminUser } from "@/types";
+import type { AdminRole, AdminUser, CreatedAdminUser, FolderTreeNode } from "@/types";
+
+interface FlatFolder {
+  id: string;
+  path: string;
+}
+
+function flattenTree(nodes: FolderTreeNode[], prefix = ""): FlatFolder[] {
+  const out: FlatFolder[] = [];
+  for (const n of nodes) {
+    const path = prefix ? `${prefix} / ${n.name}` : n.name;
+    out.push({ id: n.id, path });
+    const kids = n.subfolders || n.children || [];
+    if (kids.length) out.push(...flattenTree(kids, path));
+  }
+  return out;
+}
+
+const userRoleName = (u: AdminUser) => u.role_name || roleLabel(u.role);
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -31,8 +51,14 @@ const inputClass =
 export default function UsersAdminPage() {
   const { can: roleCan, ready: roleReady, userId: myUserId } = useRole();
   const canManage = roleCan("users.manage");
+  const canShareFolders = roleCan("departments.manage");
+  const canManageRoles = roleCan("roles.manage");
 
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [roles, setRoles] = useState<AdminRole[]>([]);
+  const [folders, setFolders] = useState<FlatFolder[]>([]);
+  const [folderPick, setFolderPick] = useState<Record<string, string>>({});
+  const [folderBusy, setFolderBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -45,7 +71,7 @@ export default function UsersAdminPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [newEmail, setNewEmail] = useState("");
   const [newName, setNewName] = useState("");
-  const [newRole, setNewRole] = useState<string>("operator");
+  const [newRoleId, setNewRoleId] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
 
@@ -57,8 +83,14 @@ export default function UsersAdminPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await api.users.list();
+      const [data, roleList, tree] = await Promise.all([
+        api.users.list(),
+        api.roles.list(),
+        canShareFolders ? api.folders.getTree() : Promise.resolve([]),
+      ]);
       setUsers([...data].sort((a, b) => a.email.localeCompare(b.email)));
+      setRoles(roleList);
+      setFolders(flattenTree(tree || []));
     } catch (err: any) {
       setError(err.message || "Failed to load users");
     } finally {
@@ -72,17 +104,17 @@ export default function UsersAdminPage() {
     else setLoading(false);
   }, [roleReady, canManage]);
 
-  const changeRole = async (u: AdminUser, role: string) => {
-    if (role === u.role) return;
+  const changeRole = async (u: AdminUser, roleId: string) => {
+    if (!roleId || roleId === u.role_id) return;
     setSavingId(u.id);
     setRowError(null);
     setNotice("");
     try {
-      const updated = await api.users.update(u.id, { role });
+      const updated = await api.users.update(u.id, { role_id: roleId });
       setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, ...updated } : x)));
-      setNotice(`${u.email} is now ${roleLabel(updated.role)}. The change applies on their next sign-in or page load.`);
+      setNotice(`${u.email} is now ${userRoleName(updated)}. It applies from their next click.`);
     } catch (err: any) {
-      // e.g. 400 "can't change your own role" / "last it_admin" — show the
+      // e.g. 400 "can't change your own role" / 403 delegation guard — show the
       // server's own detail; the select snaps back since state wasn't changed.
       setRowError({ id: u.id, message: err.message || "Failed to change role" });
     } finally {
@@ -93,21 +125,54 @@ export default function UsersAdminPage() {
   const resetAddForm = () => {
     setNewEmail("");
     setNewName("");
-    setNewRole("operator");
+    setNewRoleId("");
     setCreateError("");
+  };
+
+  const shareFolder = async (u: AdminUser) => {
+    const folderId = folderPick[u.id];
+    if (!folderId) return;
+    setFolderBusy(`share:${u.id}`);
+    setRowError(null);
+    setNotice("");
+    try {
+      await api.users.shareFolder(u.id, folderId);
+      setFolderPick((p) => ({ ...p, [u.id]: "" }));
+      setNotice(`Folder shared with ${u.email}.`);
+      await fetchUsers();
+    } catch (err: any) {
+      setRowError({ id: u.id, message: err.message || "Failed to share folder" });
+    } finally {
+      setFolderBusy(null);
+    }
+  };
+
+  const unshareFolder = async (u: AdminUser, folderId: string, name: string) => {
+    setFolderBusy(`unshare:${u.id}:${folderId}`);
+    setRowError(null);
+    setNotice("");
+    try {
+      await api.users.unshareFolder(u.id, folderId);
+      setNotice(`"${name}" is no longer shared with ${u.email}.`);
+      await fetchUsers();
+    } catch (err: any) {
+      setRowError({ id: u.id, message: err.message || "Failed to stop sharing" });
+    } finally {
+      setFolderBusy(null);
+    }
   };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreateError("");
     setNotice("");
-    if (!newEmail.trim() || newName.trim().length < 2) {
-      setCreateError("Enter an email and a full name (at least 2 characters).");
+    if (!newEmail.trim() || newName.trim().length < 2 || !newRoleId) {
+      setCreateError("Enter an email, a full name (at least 2 characters) and a role.");
       return;
     }
     setCreating(true);
     try {
-      const res = await api.users.create({ email: newEmail.trim(), full_name: newName.trim(), role: newRole });
+      const res = await api.users.create({ email: newEmail.trim(), full_name: newName.trim(), role_id: newRoleId });
       setCreated(res);
       setCopied(false);
       setShowAdd(false);
@@ -154,6 +219,15 @@ export default function UsersAdminPage() {
 
         {canManage && (
           <div className="flex items-center gap-2">
+            {canManageRoles && (
+              <Link
+                href="/admin/roles"
+                className="flex items-center gap-2 text-sm text-[#0d2e5c] font-semibold px-3 py-1.5 rounded-lg hover:bg-[#f0f4f9]"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>Roles</span>
+              </Link>
+            )}
             <Link
               href="/admin/departments"
               className="flex items-center gap-2 text-sm text-[#0d2e5c] font-semibold px-3 py-1.5 rounded-lg hover:bg-[#f0f4f9]"
@@ -180,16 +254,16 @@ export default function UsersAdminPage() {
 
       <main className="max-w-[1100px] mx-auto p-6 md:p-8 space-y-6">
         {roleReady && !canManage ? (
-          <NoAccess message="Managing users and roles is only available to IT Admins." />
+          <NoAccess message="Your role doesn't include managing users." />
         ) : (
           <>
             <p className="text-sm text-[#444746]">
-              Everyone in your organization and what their role lets them do. Records officers, operators and
-              department heads only see folders granted to their department(s) — manage those on the{" "}
+              Everyone in your organization. A role decides what someone can do; which folders they see comes
+              from their departments (manage those on the{" "}
               <Link href="/admin/departments" className="font-semibold text-[#0d2e5c] underline">
                 Departments
               </Link>{" "}
-              page.
+              page) plus any folder shared with them directly below — unless their role can see all departments.
             </p>
 
             {created && (
@@ -200,7 +274,7 @@ export default function UsersAdminPage() {
                 <div className="flex items-start justify-between gap-4">
                   <h2 id="temp-pw-title" className="font-bold text-emerald-900 flex items-center gap-2">
                     <KeyRound className="w-4 h-4" aria-hidden="true" />
-                    {created.email} was added as {roleLabel(created.role)}
+                    {created.email} was added as {userRoleName(created)}
                   </h2>
                   <button
                     type="button"
@@ -286,13 +360,17 @@ export default function UsersAdminPage() {
                     </label>
                     <select
                       id="new-user-role"
+                      required
                       className={inputClass}
-                      value={newRole}
-                      onChange={(e) => setNewRole(e.target.value)}
+                      value={newRoleId}
+                      onChange={(e) => setNewRoleId(e.target.value)}
                     >
-                      {ROLES.map((r) => (
-                        <option key={r} value={r}>
-                          {ROLE_LABELS[r]}
+                      <option value="" disabled>
+                        Choose a role…
+                      </option>
+                      {roles.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
                         </option>
                       ))}
                     </select>
@@ -340,7 +418,7 @@ export default function UsersAdminPage() {
                     <tr>
                       <th scope="col" className="px-4 py-3 font-semibold">User</th>
                       <th scope="col" className="px-4 py-3 font-semibold">Role</th>
-                      <th scope="col" className="px-4 py-3 font-semibold">Departments</th>
+                      <th scope="col" className="px-4 py-3 font-semibold">Folder access</th>
                       <th scope="col" className="px-4 py-3 font-semibold">Added</th>
                     </tr>
                   </thead>
@@ -354,7 +432,9 @@ export default function UsersAdminPage() {
                     )}
                     {users.map((u) => {
                       const isSelf = !!myUserId && u.id === myUserId;
-                      const selectValue = displayRole(u.role) === u.role ? u.role : "";
+                      const selectValue = u.role_id ?? "";
+                      const sharedIds = new Set((u.folders || []).map((f) => f.folder_id));
+                      const shareable = folders.filter((f) => !sharedIds.has(f.id));
                       return (
                         <tr key={u.id} className="align-top">
                           <td className="px-4 py-3">
@@ -376,12 +456,12 @@ export default function UsersAdminPage() {
                               >
                                 {selectValue === "" && (
                                   <option value="" disabled>
-                                    {roleLabel(u.role)} (legacy)
+                                    {userRoleName(u)} (not yet moved to a role)
                                   </option>
                                 )}
-                                {ROLES.map((r) => (
-                                  <option key={r} value={r}>
-                                    {ROLE_LABELS[r]}
+                                {roles.map((r) => (
+                                  <option key={r.id} value={r.id}>
+                                    {r.name}
                                   </option>
                                 ))}
                               </select>
@@ -395,19 +475,69 @@ export default function UsersAdminPage() {
                               </p>
                             )}
                           </td>
-                          <td className="px-4 py-3">
-                            {u.departments.length === 0 ? (
+                          <td className="px-4 py-3 space-y-2">
+                            {u.departments.length === 0 && (u.folders || []).length === 0 ? (
                               <span className="text-xs text-[#444746]">—</span>
                             ) : (
                               <div className="flex flex-wrap gap-1.5">
                                 {u.departments.map((d) => (
                                   <span
                                     key={d.id}
-                                    className="px-2 py-0.5 rounded-full text-xs bg-[#edf2fc] text-[#0d2e5c] border border-[#0d2e5c]/15"
+                                    title="Through this department"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-[#edf2fc] text-[#0d2e5c] border border-[#0d2e5c]/15"
                                   >
+                                    <Building2 className="w-3 h-3" aria-hidden="true" />
                                     {d.name}
                                   </span>
                                 ))}
+                                {(u.folders || []).map((f) => (
+                                  <span
+                                    key={f.folder_id}
+                                    title="Shared with this user directly"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-50 text-amber-900 border border-amber-300"
+                                  >
+                                    <FolderIcon className="w-3 h-3" aria-hidden="true" />
+                                    {f.name}
+                                    {canShareFolders && (
+                                      <button
+                                        type="button"
+                                        onClick={() => unshareFolder(u, f.folder_id, f.name)}
+                                        disabled={folderBusy === `unshare:${u.id}:${f.folder_id}`}
+                                        aria-label={`Stop sharing ${f.name} with ${u.email}`}
+                                        className="ml-0.5 rounded hover:bg-amber-100 disabled:opacity-50"
+                                      >
+                                        <X className="w-3 h-3" aria-hidden="true" />
+                                      </button>
+                                    )}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {canShareFolders && shareable.length > 0 && (
+                              <div className="flex items-center gap-1.5">
+                                <select
+                                  aria-label={`Share a folder with ${u.email}`}
+                                  value={folderPick[u.id] ?? ""}
+                                  onChange={(e) => setFolderPick((p) => ({ ...p, [u.id]: e.target.value }))}
+                                  className="min-w-0 max-w-[14rem] rounded-lg border border-[#c4c7c5] px-2 py-1 text-xs text-[#1f1f1f] bg-white focus:outline-none focus:ring-2 focus:ring-[#0d2e5c]/40"
+                                >
+                                  <option value="">Share a folder…</option>
+                                  {shareable.map((f) => (
+                                    <option key={f.id} value={f.id}>
+                                      {f.path}
+                                    </option>
+                                  ))}
+                                </select>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="secondary"
+                                  disabled={!folderPick[u.id]}
+                                  loading={folderBusy === `share:${u.id}`}
+                                  onClick={() => shareFolder(u)}
+                                >
+                                  Share
+                                </Button>
                               </div>
                             )}
                           </td>

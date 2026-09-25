@@ -54,6 +54,7 @@ from app.models.page import DocumentPage
 from app.models.review import ReviewAuditEntry, ReviewOriginal, ReviewState
 from app.models.template import Template
 from app.services import fact_verification_service
+from app.permissions import grants
 from app.services.audit_service import log_action
 from app.services.config_service import get_float
 from app.services.fact_service import cluster_fact_rows
@@ -62,10 +63,12 @@ MACHINE = "MACHINE_EXTRACTED"
 EDITED = "EDITED"
 VERIFIED = "VERIFIED"
 
-READ_ROLES = ("records_officer", "operator", "department_head", "legal_counsel", "it_admin", "auditor")
-EDIT_ROLES = ("records_officer", "operator", "it_admin")
-VERIFY_ROLES = ("records_officer", "it_admin")
-REVERT_ALL_ROLES = ("it_admin",)
+# Custom roles: permission keys (app/permissions.py). `role` parameters
+# below take the caller's live access (TokenPayload) or a persona string.
+READ_PERMISSION = "review.read"
+EDIT_PERMISSION = "review.edit"
+VERIFY_PERMISSION = "review.verify"
+REVERT_ALL_PERMISSION = "review.revertAll"
 
 TEXT_BLOCK_TYPES = ("heading", "paragraph")
 REMATCH_POLICY_VERSION = "review-edit-rematch-v1"
@@ -77,11 +80,11 @@ REMATCH_POLICY_VERSION = "review-edit-rematch-v1"
 _PAGE_LEVEL_AREA = 0.95
 
 
-def permissions_for(role: str) -> Dict[str, bool]:
+def permissions_for(role: Any) -> Dict[str, bool]:
     return {
-        "can_edit": role in EDIT_ROLES,
-        "can_verify": role in VERIFY_ROLES,
-        "can_revert_all": role in REVERT_ALL_ROLES,
+        "can_edit": grants(role, EDIT_PERMISSION),
+        "can_verify": grants(role, VERIFY_PERMISSION),
+        "can_revert_all": grants(role, REVERT_ALL_PERMISSION),
     }
 
 
@@ -567,9 +570,9 @@ async def get_review_document(db: AsyncSession, tenant_id: UUID, document_id: UU
 # Writing
 # --------------------------------------------------------------------------
 
-def _require(role: str, allowed: Tuple[str, ...], action: str) -> None:
-    if role not in allowed:
-        raise HTTPException(status_code=403, detail=f"{action} requires one of: {', '.join(allowed)}")
+def _require(role: Any, key: str, action: str) -> None:
+    if not grants(role, key):
+        raise HTTPException(status_code=403, detail=f"{action} is not allowed for your role ({key})")
 
 
 async def _lock_state(db: AsyncSession, tenant_id: UUID, document_id: UUID, expected_version: Optional[int]) -> Tuple[Document, ReviewOriginal, ReviewState]:
@@ -787,7 +790,7 @@ async def edit_cell(
     db: AsyncSession, tenant_id: UUID, document_id: UUID, actor_id: UUID, role: str, expected_version: Optional[int],
     block_id: str, row_id: str, col: int, value: str, expected_fact_version: Optional[int] = None,
 ) -> Dict[str, Any]:
-    _require(role, EDIT_ROLES, "Editing")
+    _require(role, EDIT_PERMISSION, "Editing")
     _, original, state = await _lock_state(db, tenant_id, document_id, expected_version)
     _, block = _find_block(state, block_id)
     ri, row = _find_row(block, row_id)
@@ -823,7 +826,7 @@ async def edit_text_block(
     db: AsyncSession, tenant_id: UUID, document_id: UUID, actor_id: UUID, role: str, expected_version: Optional[int],
     block_id: str, text: str,
 ) -> Dict[str, Any]:
-    _require(role, EDIT_ROLES, "Editing")
+    _require(role, EDIT_PERMISSION, "Editing")
     _, _, state = await _lock_state(db, tenant_id, document_id, expected_version)
     _, block = _find_block(state, block_id)
     if block["type"] not in TEXT_BLOCK_TYPES:
@@ -847,7 +850,7 @@ async def revert(
 ) -> Dict[str, Any]:
     """Undo one change: a cell (row_id + col), a row deletion (row_id), or a
     block's text/deletion (block_id alone)."""
-    _require(role, EDIT_ROLES, "Reverting")
+    _require(role, EDIT_PERMISSION, "Reverting")
     _, original, state = await _lock_state(db, tenant_id, document_id, expected_version)
     orig_blocks, orig_rows, orig_cells = _original_index(original)
     _, block = _find_block(state, block_id)
@@ -913,7 +916,7 @@ async def add_row(
     db: AsyncSession, tenant_id: UUID, document_id: UUID, actor_id: UUID, role: str, expected_version: Optional[int],
     block_id: str, after_row_id: Optional[str],
 ) -> Dict[str, Any]:
-    _require(role, EDIT_ROLES, "Adding rows")
+    _require(role, EDIT_PERMISSION, "Adding rows")
     _, original, state = await _lock_state(db, tenant_id, document_id, expected_version)
     _, block = _find_block(state, block_id)
     if block["type"] != "table":
@@ -944,7 +947,7 @@ async def delete_row(
 ) -> Dict[str, Any]:
     """An added row is removed outright (the audit keeps it). An extracted
     row is only hidden -- its facts are untouched and it can be restored."""
-    _require(role, EDIT_ROLES, "Deleting rows")
+    _require(role, EDIT_PERMISSION, "Deleting rows")
     _, _, state = await _lock_state(db, tenant_id, document_id, expected_version)
     _, block = _find_block(state, block_id)
     ri, row = _find_row(block, row_id)
@@ -966,7 +969,7 @@ async def add_block(
     db: AsyncSession, tenant_id: UUID, document_id: UUID, actor_id: UUID, role: str, expected_version: Optional[int],
     block_type: str, text: str, after_block_id: Optional[str], page: Optional[int],
 ) -> Dict[str, Any]:
-    _require(role, EDIT_ROLES, "Adding blocks")
+    _require(role, EDIT_PERMISSION, "Adding blocks")
     if block_type not in TEXT_BLOCK_TYPES:
         raise HTTPException(status_code=400, detail=f"Only {' / '.join(TEXT_BLOCK_TYPES)} blocks can be added")
     _, _, state = await _lock_state(db, tenant_id, document_id, expected_version)
@@ -985,7 +988,7 @@ async def delete_block(
     db: AsyncSession, tenant_id: UUID, document_id: UUID, actor_id: UUID, role: str, expected_version: Optional[int],
     block_id: str,
 ) -> Dict[str, Any]:
-    _require(role, EDIT_ROLES, "Deleting blocks")
+    _require(role, EDIT_PERMISSION, "Deleting blocks")
     _, _, state = await _lock_state(db, tenant_id, document_id, expected_version)
     bi, block = _find_block(state, block_id)
     if block.get("deleted"):
@@ -1008,7 +1011,7 @@ async def revert_all(
     """Back to raw extraction. Facts changed outside the review screen since
     this screen's last write are left alone and reported in `skipped` --
     the same rule as a single revert, applied cell by cell."""
-    _require(role, REVERT_ALL_ROLES, "Revert all")
+    _require(role, REVERT_ALL_PERMISSION, "Revert all")
     _, original, state = await _lock_state(db, tenant_id, document_id, expected_version)
     _, _, orig_cells = _original_index(original)
     facts = await _load_facts(db, tenant_id, document_id, state.blocks)
@@ -1065,7 +1068,7 @@ async def set_verified(
     db: AsyncSession, tenant_id: UUID, document_id: UUID, actor_id: UUID, role: str, expected_version: Optional[int],
     block_id: str, row_id: Optional[str], verified: bool, fact_versions: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
-    _require(role, VERIFY_ROLES, "Verifying")
+    _require(role, VERIFY_PERMISSION, "Verifying")
     _, _, state = await _lock_state(db, tenant_id, document_id, expected_version)
     _, block = _find_block(state, block_id)
     now = datetime.utcnow().isoformat()

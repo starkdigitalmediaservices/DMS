@@ -314,6 +314,12 @@ export default function AdminPage() {
               <span>Users &amp; Roles</span>
             </Button>
           </Link>
+          <Link href="/admin/roles">
+            <Button variant="secondary" size="sm">
+              <ShieldCheck className="w-4 h-4 mr-2" />
+              <span>Roles</span>
+            </Button>
+          </Link>
           <Link href="/admin/departments">
             <Button variant="secondary" size="sm">
               <Building2 className="w-4 h-4 mr-2" />

@@ -4,7 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...deps import get_tenant_db, require_role, require_tenant_access
+from ...deps import get_tenant_db, require_permission, require_tenant_access
 from ...schemas.auth import TokenPayload
 from ...schemas.template import TemplateCreate, TemplateUpdate, TemplateResponse
 from ...services import template_service
@@ -33,7 +33,7 @@ async def get_template_api(
 @router.post("", response_model=TemplateResponse, status_code=201)
 async def create_template_api(
     body: TemplateCreate,
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("templates.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -47,7 +47,7 @@ async def create_template_api(
 async def update_template_api(
     template_id: uuid.UUID,
     body: TemplateUpdate,
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("templates.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -62,7 +62,7 @@ async def update_template_api(
 @router.delete("/{template_id}", status_code=204)
 async def delete_template_api(
     template_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("templates.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)

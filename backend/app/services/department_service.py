@@ -1,4 +1,4 @@
-from typing import Optional, Set
+from typing import Any, Optional, Set
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -6,8 +6,10 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import REQUEST_GUCS_KEY, set_request_gucs
-from app.models.department import Department, DepartmentMember, DepartmentFolder
+from app.models.department import Department, DepartmentMember, DepartmentFolder, UserFolder
 from app.models.folder import Folder
+from app.models.role import Role
+from app.permissions import legacy_access, sees_all_departments
 from app.models.user import User
 from app.services.audit_service import log_action
 
@@ -21,8 +23,10 @@ from app.services.audit_service import log_action
 # Enforced by Postgres RLS (migration 0053), not by per-query filters: see
 # apply_request_scope. Any role not listed as tenant-wide -- including the
 # legacy 'user' value -- is scoped, so an unexpected role fails closed.
-TENANT_WIDE_ROLES = {"it_admin", "auditor", "legal_counsel"}
-DEPARTMENT_SCOPED_ROLES = {"records_officer", "operator", "department_head"}
+#
+# Custom roles (2026-09-25): "tenant-wide" is now the role's all_departments
+# flag, read via permissions.sees_all_departments. The old personas map onto
+# it exactly (it_admin, auditor, legal_counsel = all departments).
 
 
 async def create_department(db: AsyncSession, tenant_id: UUID, name: str, actor_id: UUID) -> Department:
@@ -89,13 +93,62 @@ async def grant_department_folder(db: AsyncSession, tenant_id: UUID, department_
     return grant
 
 
+async def grant_user_folder(db: AsyncSession, tenant_id: UUID, user_id: UUID, folder_id: UUID, actor_id: UUID) -> UserFolder:
+    """R14: share one folder (and its subfolders) with one user directly."""
+    if actor_id is None:
+        raise ValueError("granting folder scope requires an actor")
+    user = await db.get(User, user_id)
+    if not user or user.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="User not found")
+    folder = await db.get(Folder, folder_id)
+    if not folder or folder.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    existing = await db.execute(
+        select(UserFolder.id).where(UserFolder.user_id == user_id, UserFolder.folder_id == folder_id)
+    )
+    if existing.first():
+        raise HTTPException(status_code=409, detail="This folder is already shared with this user")
+    grant = UserFolder(tenant_id=tenant_id, user_id=user_id, folder_id=folder_id, created_by_actor_id=actor_id)
+    db.add(grant)
+    await db.flush()
+    await log_action(db, actor_id, tenant_id, "user.grant_folder", resource_type="user", resource_id=user_id,
+                     details={"folder_id": str(folder_id)})
+    return grant
+
+
+async def revoke_user_folder(db: AsyncSession, tenant_id: UUID, user_id: UUID, folder_id: UUID, actor_id: UUID) -> None:
+    res = await db.execute(
+        delete(UserFolder)
+        .where(UserFolder.tenant_id == tenant_id, UserFolder.user_id == user_id, UserFolder.folder_id == folder_id)
+        .returning(UserFolder.id)
+    )
+    if not res.first():
+        raise HTTPException(status_code=404, detail="This folder isn't shared with this user")
+    await log_action(db, actor_id, tenant_id, "user.revoke_folder", resource_type="user", resource_id=user_id,
+                     details={"folder_id": str(folder_id)})
+
+
+async def user_folders_by_user(db: AsyncSession, tenant_id: UUID) -> dict:
+    rows = await db.execute(
+        select(UserFolder.user_id, Folder.id, Folder.name)
+        .join(Folder, Folder.id == UserFolder.folder_id)
+        .where(UserFolder.tenant_id == tenant_id)
+        .order_by(Folder.name)
+    )
+    out: dict = {}
+    for user_id, fid, name in rows.all():
+        out.setdefault(user_id, []).append({"folder_id": str(fid), "name": name})
+    return out
+
+
 async def list_departments(db: AsyncSession, tenant_id: UUID) -> list:
     depts = (await db.execute(
         select(Department).where(Department.tenant_id == tenant_id).order_by(Department.name)
     )).scalars().all()
     members = (await db.execute(
-        select(DepartmentMember.department_id, User.id, User.email, User.full_name, User.role)
+        select(DepartmentMember.department_id, User.id, User.email, User.full_name, User.role, Role.name)
         .join(User, User.id == DepartmentMember.user_id)
+        .outerjoin(Role, Role.id == User.role_id)
         .where(DepartmentMember.tenant_id == tenant_id)
         .order_by(User.email)
     )).all()
@@ -109,11 +162,13 @@ async def list_departments(db: AsyncSession, tenant_id: UUID) -> list:
     by_dept = {d.id: {"id": str(d.id), "name": d.name,
                       "created_at": d.created_at.isoformat() if d.created_at else None,
                       "members": [], "folders": []} for d in depts}
-    for dept_id, uid, email, full_name, role in members:
+    for dept_id, uid, email, full_name, role, role_name in members:
         if dept_id in by_dept:
+            legacy = role.value if hasattr(role, "value") else str(role)
             by_dept[dept_id]["members"].append({
                 "user_id": str(uid), "email": email, "full_name": full_name,
-                "role": role.value if hasattr(role, "value") else str(role),
+                "role": legacy,
+                "role_name": role_name or legacy_access(legacy)[3],
             })
     for dept_id, fid, name in folders:
         if dept_id in by_dept:
@@ -203,14 +258,18 @@ async def list_user_department_folder_ids(db: AsyncSession, tenant_id: UUID, use
 async def list_user_scope_folder_ids(db: AsyncSession, tenant_id: UUID, user_id: UUID) -> Set[UUID]:
     """Granted folders plus every folder beneath them. A grant covers the
     whole project subtree, so a document filed in a subfolder of a granted
-    project is in scope too. Needs tenant-wide folder visibility to walk
-    the tree (see apply_request_scope)."""
+    project is in scope too. Grants come from the user's departments and,
+    since R14, from folders shared with the user directly. Needs
+    tenant-wide folder visibility to walk the tree (see apply_request_scope)."""
     res = await db.execute(text("""
         WITH RECURSIVE scope AS (
             SELECT df.folder_id AS id
             FROM iam_dg_department_folders df
             JOIN iam_dg_department_members dm ON dm.department_id = df.department_id
             WHERE dm.user_id = :user_id AND df.tenant_id = :tenant_id
+            UNION
+            SELECT uf.folder_id FROM iam_dg_user_folders uf
+            WHERE uf.user_id = :user_id AND uf.tenant_id = :tenant_id
             UNION
             SELECT f.id FROM doc_dg_folders f JOIN scope s ON f.parent_id = s.id
         )
@@ -219,15 +278,16 @@ async def list_user_scope_folder_ids(db: AsyncSession, tenant_id: UUID, user_id:
     return set(res.scalars().all())
 
 
-async def apply_request_scope(db: AsyncSession, tenant_id: UUID, user_id: UUID, role: str) -> None:
+async def apply_request_scope(db: AsyncSession, tenant_id: UUID, user_id: UUID, role: Any) -> None:
     """Set the Postgres settings migration 0053's department_scope_policy
-    reads. Tenant-wide roles get dept_scoped='0' (no restriction beyond the
-    tenant); department-scoped roles get the folder subtree they were
+    reads. `role` is the caller's live access (TokenPayload) or an old
+    persona string. Roles with all_departments get dept_scoped='0' (no
+    restriction beyond the tenant); every other role gets the folder subtree they were
     granted -- which may be empty, meaning only their own root uploads.
     The policies fail closed: a dms_app session that never calls this (or
     set_tenant_wide_scope) sees no documents at all."""
     gucs = {"app.current_user_id": str(user_id), "app.dept_scoped": "0", "app.scope_folder_ids": ""}
-    if role not in TENANT_WIDE_ROLES:
+    if not sees_all_departments(role):
         # Walking the folder tree needs to see it all; the policies fail
         # closed, so open it up just for this lookup, then narrow.
         await set_request_gucs(db, {"app.dept_scoped": "0"})

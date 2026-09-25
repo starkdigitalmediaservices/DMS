@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 from fastapi import UploadFile, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, or_
 from sqlalchemy.orm import selectinload
 from uuid import UUID
 
@@ -649,9 +649,16 @@ async def _resolve_policy_actor(db: AsyncSession, tenant_id: UUID, cache: dict) 
     if tenant_id in cache:
         return cache[tenant_id]
 
+    from app.models.role import Role
     from app.models.user import User
+    # The tenant's Admin: holder of the locked system role, or -- for a user
+    # not moved onto custom roles yet -- the old it_admin persona.
     res = await db.execute(
-        select(User.id).where(User.tenant_id == tenant_id, User.role == "it_admin").limit(1)
+        select(User.id)
+        .outerjoin(Role, Role.id == User.role_id)
+        .where(User.tenant_id == tenant_id, or_(Role.is_system.is_(True), User.role == "it_admin"))
+        .order_by(User.created_at)
+        .limit(1)
     )
     actor_id = res.scalar_one_or_none()
     if actor_id is None:

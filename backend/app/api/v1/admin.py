@@ -5,7 +5,7 @@ from sqlalchemy import select, func, case, extract, cast, Numeric
 from datetime import datetime, timedelta
 import uuid
 
-from ...deps import get_tenant_db, require_role
+from ...deps import get_tenant_db, require_permission
 from ...schemas.auth import TokenPayload
 from ...models.user import User
 from ...models.tenant import Tenant
@@ -27,7 +27,7 @@ class ConfigUpdateRequest(BaseModel):
 
 @router.get('/analytics')
 async def get_admin_analytics(
-    current_user: TokenPayload = Depends(require_role('it_admin')),
+    current_user: TokenPayload = Depends(require_permission("analytics.view")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     """Comprehensive DMS analytics for the Admin Panel, scoped to active tenant."""
@@ -204,7 +204,7 @@ async def get_admin_analytics(
 
 @router.get('/api-analytics')
 async def get_api_analytics(
-    current_user: TokenPayload = Depends(require_role('it_admin')),
+    current_user: TokenPayload = Depends(require_permission("analytics.view")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     """API call analytics from api_logs table, scoped to active tenant."""
@@ -367,7 +367,7 @@ async def get_api_analytics(
 
 @router.get('/config')
 async def list_config_api(
-    current_user: TokenPayload = Depends(require_role('it_admin')),
+    current_user: TokenPayload = Depends(require_permission("config.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     """T03 — sys_dg_config is global (no tenant_id column, see D2's own
@@ -382,7 +382,7 @@ async def list_config_api(
 async def update_config_api(
     key: str,
     body: ConfigUpdateRequest,
-    current_user: TokenPayload = Depends(require_role('it_admin')),
+    current_user: TokenPayload = Depends(require_permission("config.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)

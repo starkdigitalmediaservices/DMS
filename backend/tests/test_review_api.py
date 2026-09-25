@@ -174,3 +174,17 @@ async def test_documents_list_shows_progress_and_respects_scope(world):
     async with _client(w, "op") as c:
         ids = {i["document_id"] for i in (await c.get("/api/v1/review/documents")).json()["items"]}
         assert str(w["doc_A"]) in ids and str(w["doc_B"]) not in ids
+
+
+@pytest.mark.asyncio
+async def test_opening_review_is_audit_logged(world):
+    # Custom roles R16 / decision D4: viewing is open to every role, so it's audited.
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+    w = world
+    async with _client(w, "auditor") as c:
+        assert (await c.get(_base(w))).status_code == 200
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(select(AuditLog).where(
+            AuditLog.action == "review.open", AuditLog.actor_id == w["auditor"]))).scalars().all()
+    assert len(rows) == 1 and rows[0].resource_type == "document"

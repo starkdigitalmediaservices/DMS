@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...schemas.auth import TokenPayload
-from ...deps import get_tenant_db, require_tenant_access, require_role
+from ...deps import get_tenant_db, require_tenant_access, require_permission
 from ...services import records_service
 from ...models.record_amendment import VALID_LEGAL_STATUSES
 
@@ -22,7 +22,7 @@ class RecordCreate(BaseModel):
 @router.post("", status_code=201)
 async def create_record_api(
     record_in: RecordCreate,
-    current_user: TokenPayload = Depends(require_role('records_officer', 'operator', 'it_admin')),
+    current_user: TokenPayload = Depends(require_permission("records.create")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)

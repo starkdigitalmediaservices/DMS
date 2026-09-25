@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...deps import get_tenant_db, require_role
+from ...deps import get_tenant_db, require_permission
 from ...schemas.auth import TokenPayload
 from ...services import department_service
 
@@ -24,7 +24,7 @@ class DepartmentFolderGrant(BaseModel):
 
 @router.get("")
 async def list_departments_api(
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("departments.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     return await department_service.list_departments(db, uuid.UUID(current_user.tenant_id))
@@ -33,7 +33,7 @@ async def list_departments_api(
 @router.post("")
 async def create_department_api(
     body: DepartmentCreate,
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("departments.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -45,7 +45,7 @@ async def create_department_api(
 @router.delete("/{department_id}", status_code=204)
 async def delete_department_api(
     department_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("departments.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     """Delete a department, its memberships and its folder grants. This
@@ -60,7 +60,7 @@ async def delete_department_api(
 async def add_department_member_api(
     department_id: uuid.UUID,
     body: DepartmentMemberAdd,
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("departments.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -73,7 +73,7 @@ async def add_department_member_api(
 async def grant_department_folder_api(
     department_id: uuid.UUID,
     body: DepartmentFolderGrant,
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("departments.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     tenant_id = uuid.UUID(current_user.tenant_id)
@@ -86,7 +86,7 @@ async def grant_department_folder_api(
 async def remove_department_member_api(
     department_id: uuid.UUID,
     user_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("departments.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     await department_service.remove_department_member(
@@ -98,7 +98,7 @@ async def remove_department_member_api(
 async def revoke_department_folder_api(
     department_id: uuid.UUID,
     folder_id: uuid.UUID,
-    current_user: TokenPayload = Depends(require_role("it_admin")),
+    current_user: TokenPayload = Depends(require_permission("departments.manage")),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     await department_service.revoke_department_folder(

@@ -42,6 +42,7 @@ _TENANT_SCOPED_TABLES_CHILD_FIRST = [
     "doc_dg_folders",
     "iam_dg_department_folders",
     "iam_dg_department_members",
+    "iam_dg_user_folders",
     "iam_dg_departments",
     "sys_dg_corpus_calibration",
     "sys_dg_retention_classes",
@@ -56,6 +57,8 @@ _TENANT_SCOPED_TABLES_CHILD_FIRST = [
     # doc_dg_review_audit is append-only the same way; every row it holds is
     # mirrored by an audit_dg_logs row, so its tenant is already pinned.
     "iam_dg_users",
+    # after users: users.role_id points here (created_by is SET NULL).
+    "iam_dg_roles",
 ]
 
 

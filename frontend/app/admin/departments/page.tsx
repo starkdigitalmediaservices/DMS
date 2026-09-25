@@ -172,13 +172,13 @@ export default function DepartmentsAdminPage() {
 
       <main className="max-w-[1100px] mx-auto p-6 md:p-8 space-y-6">
         {roleReady && !canManage ? (
-          <NoAccess message="Managing departments is only available to IT Admins." />
+          <NoAccess message="Your role doesn't include managing departments." />
         ) : (
           <>
             <p className="text-sm text-[#444746]">
-              A department groups users and the folders they can see. Records officers, operators and department
-              heads only see folders granted to one of their departments (plus their own root-level uploads). Legal
-              counsel, auditors and IT admins aren&apos;t limited by department.
+              A department groups users and the folders they can see. Users see only folders granted to one of their
+              departments or shared with them directly (plus their own root-level uploads) — unless their role can see
+              all departments.
             </p>
 
             <form
@@ -311,7 +311,7 @@ export default function DepartmentsAdminPage() {
                                     <div className="min-w-0">
                                       <div className="text-sm text-[#1f1f1f] truncate">{m.full_name || m.email}</div>
                                       <div className="text-xs text-[#444746] truncate">
-                                        {m.email} · {roleLabel(m.role)}
+                                        {m.email} · {m.role_name || roleLabel(m.role)}
                                       </div>
                                     </div>
                                     <button
@@ -351,7 +351,7 @@ export default function DepartmentsAdminPage() {
                               </option>
                               {availableUsers.map((u) => (
                                 <option key={u.id} value={u.id}>
-                                  {u.full_name} ({u.email}) — {roleLabel(u.role)}
+                                  {u.full_name} ({u.email}) — {u.role_name || roleLabel(u.role)}
                                 </option>
                               ))}
                             </select>

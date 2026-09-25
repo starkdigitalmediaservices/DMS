@@ -36,6 +36,7 @@ interface UserProfile {
   full_name: string;
   email: string;
   role: string;
+  role_name?: string | null;
   tenant_id: string;
   tenant_name: string;
   created_at: string;
@@ -213,7 +214,7 @@ export default function ProfilePage() {
                     <div className="flex items-center gap-3 flex-wrap">
                       <h2 className="text-2xl font-bold text-textMain">{profile.full_name}</h2>
                       <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-primary/10 text-primary border border-primary/20">
-                        {roleLabel(profile.role)}
+                        {profile.role_name || roleLabel(profile.role)}
                       </span>
                     </div>
 

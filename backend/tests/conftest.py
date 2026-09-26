@@ -1,6 +1,9 @@
+import asyncio
+
 import pytest_asyncio
 from sqlalchemy import text
 
+from app.api_logging_middleware import _pending_log_tasks
 from app.database import engine, app_engine
 from app.services.cache_service import close_redis
 
@@ -8,6 +11,15 @@ from app.services.cache_service import close_redis
 @pytest_asyncio.fixture(autouse=True)
 async def cleanup_connections_after_test():
     yield
+    # 2026-09-26: the API-logging middleware writes each log line in a
+    # background task. Each test runs on its own event loop, so a write still
+    # pending when the test ends is stranded mid-transaction (its 5 s timeout
+    # can never fire on a loop nobody runs) and holds row locks that the
+    # session-end tenant purge then waits on forever. Let them finish here,
+    # while this test's loop is still alive. Each write is already
+    # time-limited, so this cannot hang.
+    if _pending_log_tasks:
+        await asyncio.gather(*list(_pending_log_tasks), return_exceptions=True)
     await engine.dispose()
     # D-2 fix, 2026-09-07 — app_engine (the restricted-role connection
     # get_db/get_tenant_db actually use) is a second engine alongside the

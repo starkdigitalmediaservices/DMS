@@ -14,6 +14,7 @@ import {
   Building2,
   ShieldCheck,
   Folder as FolderIcon,
+  Globe2,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useRole, roleLabel } from "@/lib/permissions";
@@ -435,6 +436,9 @@ export default function UsersAdminPage() {
                       const selectValue = u.role_id ?? "";
                       const sharedIds = new Set((u.folders || []).map((f) => f.folder_id));
                       const shareable = folders.filter((f) => !sharedIds.has(f.id));
+                      // Admin, or a role with "can see all departments", already sees every
+                      // folder -- sharing one with them would change nothing.
+                      const seesAll = u.is_admin || !!roles.find((r) => r.id === u.role_id)?.all_departments;
                       return (
                         <tr key={u.id} className="align-top">
                           <td className="px-4 py-3">
@@ -476,10 +480,19 @@ export default function UsersAdminPage() {
                             )}
                           </td>
                           <td className="px-4 py-3 space-y-2">
-                            {u.departments.length === 0 && (u.folders || []).length === 0 ? (
+                            {!seesAll && u.departments.length === 0 && (u.folders || []).length === 0 ? (
                               <span className="text-xs text-[#444746]">—</span>
                             ) : (
                               <div className="flex flex-wrap gap-1.5">
+                                {seesAll && (
+                                  <span
+                                    title="Their role can see all departments"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-50 text-amber-900 border border-amber-300"
+                                  >
+                                    <Globe2 className="w-3 h-3" aria-hidden="true" />
+                                    All folders
+                                  </span>
+                                )}
                                 {u.departments.map((d) => (
                                   <span
                                     key={d.id}
@@ -513,7 +526,7 @@ export default function UsersAdminPage() {
                                 ))}
                               </div>
                             )}
-                            {canShareFolders && shareable.length > 0 && (
+                            {canShareFolders && !seesAll && shareable.length > 0 && (
                               <div className="flex items-center gap-1.5">
                                 <select
                                   aria-label={`Share a folder with ${u.email}`}
